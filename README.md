@@ -15,12 +15,12 @@
 
 ## 关键结果
 
-| | |
-|---|---|
-| **~900 Mbps** | 单流单核回环吞吐（裸 UDP 天花板约 1.2 Gbps） |
-| **0.700** | 乘性降窗比例，13 次拥塞事件全部一致，理论 β = 0.7 |
-| **0.7%** | cwnd 与独立回算理论曲线的平均偏差 |
-| **0 次** | 热路径堆分配（原 2 次/包、34 次/ACK） |
+| 单流回环吞吐 | 降窗比例 | 理论曲线偏差 | 热路径堆分配 |
+|---:|---:|---:|---:|
+| **~900 Mbps** | **0.700** | **0.7%** | **0 次/包** |
+
+裸 UDP 天花板约 1.2 Gbps · 13 次拥塞事件的降窗比例全部为 0.700（理论 β = 0.7）·
+理论曲线由 Python 按 RFC 独立回算 · 原实现为 2 次/包、34 次/ACK
 
 ---
 
@@ -115,9 +115,13 @@ cmake --build build --config Release
 | 1% 真实丢包 | 463.7 Mbps | 重传 32 包即恢复 |
 | 2% 真实丢包 | **49.8 Mbps** | 19 次 RTO 停顿 —— 缺 PTO，见下 |
 
+![丢包率与吞吐](docs/figs/loss-cliff.svg)
+
 > **关于"达成率"要诚实说明**：同一配置连跑 6 次，协议吞吐落在 **828–926 Mbps**，
 > 而裸 UDP 基线自己在 **924–1302 Mbps** 之间漂移（41%）。配对后达成率 **64%–95%，中位约 70%**。
 > 基线比被测对象抖得更厉害，所以回环单核只能做 ±10% 量级的判断，不足以验证 5% 以内的优化收益。
+
+![六次重复运行](docs/figs/repeat-runs.svg)
 
 **两个结论：**
 
@@ -160,6 +164,19 @@ $ ./build/xport_demo --mb 32 --loss 0
 | 热路径堆分配 | **0 次/包** | 区间表、包号位图、流表全换定长结构 |
 | 接收缓冲落地 | 0.49 → **0.03 ns/B** | 每流预分配环形缓冲，8 Gbps 单流仅占单核 29% |
 | 回环 RTT | **9.0 µs**（64 B ping-pong） | 决定了 200 ms 的 RTO 下限是 RTT 的 1300 倍 |
+
+### 拥塞控制
+
+CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。每张图的数据都是固定种子的确定性仿真，
+换台机器重跑逐位一致。
+
+![CUBIC 锯齿](docs/figs/cubic-sawtooth.svg)
+
+同样的 110 秒、同一条 5 Mbps / 800 ms 的长肥管道，换算法就能看出差别：
+
+![CUBIC 与 Reno 对比](docs/figs/cubic-vs-reno.svg)
+
+逐事件的降窗比例、K 值与理论曲线偏差，全部列表在 [cc-validation.html](docs/cc-validation.html)。
 
 ---
 
@@ -248,7 +265,8 @@ apps/           xport_demo       演示
                 xport_cpubench   单包 CPU 成本
                 xport_udp_bench  真实 socket 回环基准
 docs/           四份报告（见上表）
-scripts/        quickbuild.sh · plot_cc.py · plot_udp.py
+docs/figs/      README 内嵌图表（独立 SVG，由 scripts/plot_readme.py 生成）
+scripts/        quickbuild.sh · plot_cc.py · plot_udp.py · plot_readme.py
 ```
 
 </details>
@@ -267,6 +285,9 @@ python scripts/plot_cc.py
 # 真实 socket 回环 → docs/udp-benchmark.html
 ./build/xport_udp_bench --sweep --csv build/udp_bench.csv
 python scripts/plot_udp.py
+
+# README 内嵌图表 → docs/figs/*.svg
+python scripts/plot_readme.py
 ```
 
 `xport_udp_bench` 主要参数：`--mb` 数据量 · `--streams` 并发流 ·

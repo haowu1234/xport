@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 340" width="880" height="340" role="img" aria-label="丢包率与吞吐 —— 2% 是悬崖，但掉下去的不全是丢包">
+<rect width="880" height="340" fill="#ffffff"/>
+<text x="26" y="34" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="15.5" font-weight="600" fill="#0f172a">丢包率与吞吐 —— 2% 是悬崖，但掉下去的不全是丢包</text>
+<text x="26" y="54" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#64748b">同一 4 MiB 数据 · 单流 · 本机回环 · 数据全部校验通过</text>
+<line x1="64" y1="254.0" x2="850" y2="254.0" stroke="#eef2f6"/>
+<text x="54" y="258.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">0</text>
+<line x1="64" y1="220.0" x2="850" y2="220.0" stroke="#eef2f6"/>
+<text x="54" y="224.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">200</text>
+<line x1="64" y1="186.0" x2="850" y2="186.0" stroke="#eef2f6"/>
+<text x="54" y="190.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">400</text>
+<line x1="64" y1="152.0" x2="850" y2="152.0" stroke="#eef2f6"/>
+<text x="54" y="156.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">600</text>
+<line x1="64" y1="118.0" x2="850" y2="118.0" stroke="#eef2f6"/>
+<text x="54" y="122.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">800</text>
+<line x1="64" y1="84.0" x2="850" y2="84.0" stroke="#eef2f6"/>
+<text x="54" y="88.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" text-anchor="end">1,000</text>
+<line x1="64" y1="94.3" x2="850" y2="94.3" stroke="#2563eb" stroke-width="1" stroke-dasharray="5 4"/>
+<text x="846" y="86.3" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" fill="#2563eb" text-anchor="end">直连基线 939</text>
+<rect x="105.6" y="94.3" width="74" height="159.7" rx="3" fill="#2563eb"/>
+<text x="142.6" y="85.3" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12.5" font-weight="600" fill="#0f172a" text-anchor="middle">939</text>
+<text x="142.6" y="276" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">直连</text>
+<text x="142.6" y="292" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#64748b" text-anchor="middle">0%</text>
+<rect x="262.8" y="170.7" width="74" height="83.3" rx="3" fill="#b6c2d1"/>
+<text x="299.8" y="161.7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12.5" font-weight="600" fill="#0f172a" text-anchor="middle">490</text>
+<text x="299.8" y="276" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">代理</text>
+<text x="299.8" y="292" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#64748b" text-anchor="middle">0%</text>
+<rect x="420.0" y="173.7" width="74" height="80.3" rx="3" fill="#b6c2d1"/>
+<text x="457.0" y="164.7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12.5" font-weight="600" fill="#0f172a" text-anchor="middle">472</text>
+<text x="457.0" y="276" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">0.5%</text>
+<rect x="577.2" y="175.2" width="74" height="78.8" rx="3" fill="#b6c2d1"/>
+<text x="614.2" y="166.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12.5" font-weight="600" fill="#0f172a" text-anchor="middle">464</text>
+<text x="614.2" y="276" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">1.0%</text>
+<rect x="734.4" y="245.5" width="74" height="8.5" rx="3" fill="#dc2626"/>
+<text x="771.4" y="236.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12.5" font-weight="600" fill="#0f172a" text-anchor="middle">49.8</text>
+<rect x="742.4" y="185.5" width="58" height="19" rx="9.5" fill="#dc2626"/>
+<text x="771.4" y="198.5" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="middle">RTO ×19</text>
+<text x="771.4" y="276" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">2.0%</text>
+<line x1="64" y1="254" x2="850" y2="254" stroke="#cbd5e1" stroke-width="1"/>
+<text x="18" y="169" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" fill="#64748b" transform="rotate(-90 18 169)" text-anchor="middle">吞吐 (Mbps)</text>
+<text x="26" y="328" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" fill="#94a3b8">0.5%–2% 经进程内转发代理注入丢包；代理自己就要吃一半吞吐（第 2 根柱），所以 0.5%/1% 的下降主要是代理成本，2% 的崩塌才是 RTO</text>
+<rect x="0.5" y="0.5" width="879" height="339" rx="10" fill="none" stroke="#e2e8f0"/>
+</svg>
