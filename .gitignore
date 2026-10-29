@@ -1,0 +1,16 @@
+build/
+out/
+*.exe
+*.obj
+*.o
+*.a
+*.pdb
+*.ilk
+.vs/
+.vscode/
+.cache/
+compile_commands.json
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

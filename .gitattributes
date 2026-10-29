@@ -1,0 +1,5 @@
+# 源码统一用 LF，避免跨平台 diff 噪声
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
