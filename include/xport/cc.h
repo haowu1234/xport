@@ -64,7 +64,24 @@ class CubicCc {
   //   largest_pn 本次 ACK 覆盖的最大包号
   //   srtt_us    平滑 RTT（0 表示还没有样本）
   //   sample_us  本次的 RTT 采样（0 表示本 ACK 没有有效采样）
-  void OnAck(u64 acked, u64 largest_pn, Time now, u64 srtt_us, u64 sample_us);
+  //   cwnd_limited 窗口是否被用满（见 IsCwndLimited）。false 表示应用受限 / 流控受限：
+  //              此时不增窗（RFC 9438 §4.8、RFC 7661），并冻结 CUBIC 的时间轴，
+  //              否则 cwnd 会在没被验证的情况下涨到上限，瓶颈一转移就整窗打爆队列。
+  void OnAck(u64 acked, u64 largest_pn, Time now, u64 srtt_us, u64 sample_us,
+             bool cwnd_limited = true);
+
+  // 在途 inflight 字节时，窗口算不算"被用满"。判据与 Chromium QUIC / Linux
+  // tcp_is_cwnd_limited 一致：剩余额度不到一个 pacing 突发；慢启动放宽到"用了一半以上"
+  // （慢启动每 RTT 翻倍，在途天然只有窗口的一半左右）。
+  //
+  // 刻意不用"发送循环是否因 cwnd 停下"这种逐 Tick 标志：高带宽下流控、pacing 会让
+  // 个别 Tick 短暂停发，标志一抖就漏掉增窗（实测 5 Gbps 吞吐掉一半）。也试过取一个 RTT
+  // 内的在途峰值（Linux max_packets_out 的思路），在本仿真里反而更差，没有采用。
+  bool IsCwndLimited(u64 inflight) const {
+    const double room = cwnd_ - double(inflight);
+    if (room <= double(PacingBurstBytes())) return true;
+    return phase_ != CcPhase::kCongAvoid && double(inflight) * 2.0 > cwnd_;
+  }
 
   // 拥塞事件（丢包或 RTO）。同一恢复期内的重复事件由 InRecovery 过滤。
   void OnCongestion(Time now);
@@ -125,6 +142,8 @@ class CubicCc {
   u64 round_ = 0;
   double css_exit_cwnd_ = 0;
   double last_pre_cwnd_ = 0;
+  Time last_ack_ = 0;         // 上一次 OnAck 的时刻，用于应用受限期间平移 epoch
+  bool has_last_ack_ = false;
 };
 
 }  // namespace xport

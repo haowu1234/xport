@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "test_framework.h"
+#include "xport/packet.h"
 #include "xport/sim.h"
 #include "xport/transport.h"
 
@@ -295,4 +296,68 @@ TEST(CubicDropsToBetaOnLossEvent) {
   // 乘性降窗比例必须落在 beta 附近（允许一个 RTT 内的窗口增长误差）
   const double ratio = double(cwnd_after) / double(cwnd_before);
   CHECK(ratio > 0.66 && ratio < 0.74);
+}
+
+// ---- 对端可控输入的边界 ----
+
+TEST(StreamIdBeyondLimitIsDropped) {
+  // sid 来自线上：一个 sid 很大的包不能让接收端 resize 出巨大的流表
+  LinkParams p;
+  SimLink link(p);
+  TransportConfig cfg;
+  cfg.max_streams = 8;
+  Transport t(link, 2, 1, cfg);
+
+  const auto deliver = [&](u32 sid, u64 pn) {
+    const u8 body[16] = {7};
+    u8 payload[kMaxPayload];
+    StreamFrame f;
+    f.sid = sid;
+    f.data = Bytes(body, sizeof body);
+    const std::size_t n = EncodeStream(MutBytes(payload, sizeof payload), f);
+    Header h;
+    h.pkt_num = pn;
+    h.payload_len = u16(n);
+    u8 pkt[kMtu];
+    const std::size_t hn = EncodeHeader(h, MutBytes(pkt, sizeof pkt));
+    std::memcpy(pkt + hn, payload, n);
+    t.OnPacket(Bytes(pkt, hn + n), Time(pn));
+  };
+
+  deliver(1'000'000, 1);
+  CHECK_EQ(t.stats().stream_limit, 1);
+  CHECK_EQ(t.RecvBufferSize(1'000'000), 0);
+  CHECK_EQ(t.ReadableBytes(1'000'000), 0);
+
+  deliver(7, 2);  // 上限内的最后一个 sid 正常收
+  CHECK_EQ(t.stats().stream_limit, 1);
+  CHECK_EQ(t.ReadableBytes(7), 16);
+}
+
+TEST(AppLimitedSenderKeepsCwndBounded) {
+  // 应用写入速率远低于链路：cwnd 不能随 ACK 无限上涨（RFC 7661）。
+  // 修复前同一场景 cwnd 涨到约 6.8 MB，实际在途只有 4 KB。
+  LinkParams p;
+  p.bandwidth_mbps = 1000;
+  p.delay_us = 1000;
+  p.queue_us = 5000;
+  Rig r(p);
+  const u32 sid = r.a.OpenStream();
+  const auto chunk = MakeData(1400, 3);
+  const u64 initial = r.a.Cwnd();
+
+  u64 max_inflight = 0;
+  std::vector<u8> pkt;
+  for (Time now = 0; now < 2'000'000; now += 100) {
+    if (now % 1000 == 0 && now < 1'900'000) r.a.Write(sid, Bytes(chunk));  // 留 100 ms 收尾
+    r.a.Tick(now);
+    r.b.Tick(now);
+    while (r.link.Poll(1, &pkt, now)) r.a.OnPacket(Bytes(pkt), now);
+    while (r.link.Poll(2, &pkt, now)) r.b.OnPacket(Bytes(pkt), now);
+    r.Drain();
+    max_inflight = std::max<u64>(max_inflight, r.a.InFlight());
+  }
+  CHECK(max_inflight < initial);       // 场景确实是应用受限
+  CHECK(r.a.Cwnd() <= 2 * initial);    // 窗口没有被未经验证的 ACK 撑大
+  CHECK_EQ(r.Got(sid).size(), 1900u * 1400u);  // 数据照常送达
 }

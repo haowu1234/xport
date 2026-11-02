@@ -99,7 +99,12 @@ void CubicCc::EndRound(Time now) {
   ++round_;
 }
 
-void CubicCc::OnAck(u64 acked, u64 largest_pn, Time now, u64 srtt_us, u64 sample_us) {
+void CubicCc::OnAck(u64 acked, u64 largest_pn, Time now, u64 srtt_us, u64 sample_us,
+                    bool cwnd_limited) {
+  const Time since_last = (has_last_ack_ && now > last_ack_) ? now - last_ack_ : 0;
+  last_ack_ = now;
+  has_last_ack_ = true;
+
   if (sample_us > 0) {
     const double s = double(sample_us);
     delay_min_us_ = std::min(delay_min_us_, s);
@@ -114,6 +119,14 @@ void CubicCc::OnAck(u64 acked, u64 largest_pn, Time now, u64 srtt_us, u64 sample
   }
 
   if (acked == 0) return;
+
+  // 应用受限：窗口没被用满，ACK 不能证明网络扛得住更大的窗口，不增窗。
+  // 拥塞避免阶段还要把 epoch 往后平移这段时间——三次曲线按墙钟时间算目标，
+  // 不平移的话恢复发送时 t 已经很大，目标窗口会一步跳到很高（Linux 的做法相同）。
+  if (!cwnd_limited) {
+    if (phase_ == CcPhase::kCongAvoid) epoch_start_ += since_last;
+    return;
+  }
 
   switch (phase_) {
     case CcPhase::kSlowStart:

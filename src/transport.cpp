@@ -498,6 +498,10 @@ void Transport::SlideRecvWindow(u64 shift) {
 
 void Transport::OnStream(const StreamFrame& f) {
   if (f.data.empty()) return;
+  if (f.sid >= cfg_.max_streams) {  // 先于 resize：sid 是对端可控的输入
+    ++stats_.stream_limit;
+    return;
+  }
   if (f.sid >= in_.size()) in_.resize(f.sid + 1);  // 对端 sid 从 0 连续分配
   InStream& st = in_[f.sid];
   if (st.ring.empty()) st.ring.resize(std::size_t(recv_window_), 0);  // 一次性预分配
@@ -576,6 +580,8 @@ std::size_t Transport::RecvBufferSize(u32 sid) const {
 
 void Transport::OnAck(const AckFrame& a, Time now) {
   const u64 largest = AckLargest(a);
+  // 窗口是否被用满，要看这批包被确认**之前**的在途量——确认之后在途必然变小
+  const bool cwnd_limited = cc_.IsCwndLimited(inflight_);
   u64 acked_bytes = 0;
   u64 max_acked_pn = 0;
   u64 sample = 0;
@@ -625,7 +631,7 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   if (sample > 0) UpdateRtt(sample);
   // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
   cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
-            has_rtt_ ? u64(srtt_us_) : 0, sample);
+            has_rtt_ ? u64(srtt_us_) : 0, sample, cwnd_limited);
 
   DetectLoss(now);
 }

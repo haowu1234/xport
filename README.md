@@ -3,7 +3,7 @@
 **基于 UDP 的 C++20 可靠传输框架** — 可靠 · 有序 · 多流复用 · 零第三方依赖
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
-![tests](https://img.shields.io/badge/tests-36%20passing-3fb950)
+![tests](https://img.shields.io/badge/tests-40%20passing-3fb950)
 ![dependencies](https://img.shields.io/badge/dependencies-none-3fb950)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-6e7781)
 ![status](https://img.shields.io/badge/status-M3%20runnable-blue)
@@ -65,7 +65,7 @@ git clone https://github.com/haowu1234/xport.git && cd xport
 # B. CMake
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/tests/xport_tests        # 36 个用例
+./build/tests/xport_tests        # 40 个用例
 ./build/apps/xport_demo --mb 16 --streams 4 --loss 2
 ```
 
@@ -126,7 +126,8 @@ cmake --build build --config Release
 **两个结论：**
 
 **① 瓶颈 100% 在系统调用。** 每包 2.22 次 syscall、约 10 µs 进内核；协议自身只有 ~250 ns（<3%）。
-回环上 cwnd 涨到 8 MB，实际在途却只有 10 KB —— 窗口开得再大也没用。
+回环上 cwnd 曾涨到 8 MB，实际在途却只有 10 KB —— 窗口开得再大也没用。
+（这是应用受限时仍增窗的缺陷，已修复：现在窗口用不满就不涨，见能力矩阵「cwnd 验证」。）
 
 **② 2% 丢包掉到 50 Mbps，是缺 PTO。** 回环 RTT 0.15 ms，而 RTO 下限是 200 ms（差 1300 倍）。
 窗口尾部的丢包触发不了三次重复 ACK，只能干等 200 ms。五次运行耗时 76/76/276/480/878 ms，
@@ -201,6 +202,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | 20 B 定长头 + CRC16 | ✅ | 解析在一条 cache line 内完成 |
 | varint（1/2/4/8 B） | ✅ | 对齐 RFC 9000；超 62 位拒绝而非静默截断 |
 | 帧编解码 | ✅ | STREAM / ACK / MAX_DATA / PING，含截断与非法帧防御 |
+| 流数上限 | ✅ | `max_streams`（默认 256）；越界 sid 直接丢弃，防止对端一个包撑爆流表 |
 | 帧聚合 | ✅ | 一个报文最多 16 个 STREAM 帧（可跨流），小消息 pps 降 4 倍 |
 | ACK | ✅ | **显式区间**（最多 16 段），不是位图窗口 |
 | 包级可靠传输 | ✅ | 滑动窗口 + 包阈值 3 + 时间阈值 1.125×RTT |
@@ -211,6 +213,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | 多流复用 | ✅ | **DRR**，按字节公平 |
 | 拥塞控制 | ✅ | **CUBIC**（RFC 9438）+ 快速收敛 + Reno 友好区；可切 Reno 对照 |
 | 慢启动退出 | ✅ | **HyStart++**（RFC 9406） |
+| cwnd 验证 | ✅ | 应用受限 / 流控受限时不增窗并冻结 CUBIC 时间轴（RFC 9438 §4.8、RFC 7661） |
 | pacing | ✅ | 令牌桶，慢启动 2×、拥塞避免 1.25×，突发 8 包 |
 | 流控 | ✅ | MAX_DATA 连接级窗口 + 随 ACK 捎带 + 探测防死锁 |
 | 真实 socket 后端 | ✅ | `IoEndpoint` + Winsock / BSD，非阻塞轮询 |
