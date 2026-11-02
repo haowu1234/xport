@@ -187,3 +187,36 @@ TEST(RenoModeHalvesAndGrowsLinearly) {
   cc.OnAck(kMss, 2, 100'000, 40'000, 40'000);
   CHECK_EQ(cc.cwnd(), before + kMss * kMss / before);
 }
+
+TEST(CubicDoesNotGrowWhenAppLimited) {
+  CubicCc cc;
+  cc.OnAck(490 * kMss, 1, 0, 40'000, 40'000);
+  const u64 ss = cc.cwnd();
+  // 慢启动：应用受限的 ACK 不能涨窗（RFC 9438 §4.8 / RFC 7661）
+  cc.OnAck(100 * kMss, 2, 10'000, 40'000, 40'000, /*cwnd_limited=*/false);
+  CHECK_EQ(cc.cwnd(), ss);
+
+  cc.OnCongestion(20'000);
+  const u64 ca = cc.cwnd();
+  // 拥塞避免：同样不涨
+  for (int i = 1; i <= 100; ++i) {
+    cc.OnAck(10 * kMss, 2 + u64(i), 20'000 + Time(i) * 40'000, 40'000, 40'000, false);
+  }
+  CHECK_EQ(cc.cwnd(), ca);
+}
+
+TEST(CubicEpochFreezesWhileAppLimited) {
+  // 应用受限期间 CUBIC 的时间轴必须冻结：否则恢复发送时 t 已过了 K，
+  // 目标窗口会一步跳过 W_max。
+  CubicCc cc;
+  cc.OnAck(490 * kMss, 1, 0, 40'000, 40'000);
+  cc.OnCongestion(0);
+  const Time e0 = cc.EpochStart();
+  Time now = 0;
+  for (int i = 0; i < 250; ++i) {  // 10 s 应用受限，远超 K ≈ 7.2 s
+    now += 40'000;
+    cc.OnAck(kMss, 2 + u64(i), now, 40'000, 40'000, false);
+  }
+  CHECK_EQ(cc.EpochStart(), e0 + now);  // 整段应用受限时间都被平移掉
+  CHECK(cc.TargetBytes(now, 40'000) < 500.0 * double(kMss));  // 仍在 W_max 之下
+}

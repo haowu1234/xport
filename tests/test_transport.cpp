@@ -333,3 +333,31 @@ TEST(StreamIdBeyondLimitIsDropped) {
   CHECK_EQ(t.stats().stream_limit, 1);
   CHECK_EQ(t.ReadableBytes(7), 16);
 }
+
+TEST(AppLimitedSenderKeepsCwndBounded) {
+  // 应用写入速率远低于链路：cwnd 不能随 ACK 无限上涨（RFC 7661）。
+  // 修复前同一场景 cwnd 涨到约 6.8 MB，实际在途只有 4 KB。
+  LinkParams p;
+  p.bandwidth_mbps = 1000;
+  p.delay_us = 1000;
+  p.queue_us = 5000;
+  Rig r(p);
+  const u32 sid = r.a.OpenStream();
+  const auto chunk = MakeData(1400, 3);
+  const u64 initial = r.a.Cwnd();
+
+  u64 max_inflight = 0;
+  std::vector<u8> pkt;
+  for (Time now = 0; now < 2'000'000; now += 100) {
+    if (now % 1000 == 0 && now < 1'900'000) r.a.Write(sid, Bytes(chunk));  // 留 100 ms 收尾
+    r.a.Tick(now);
+    r.b.Tick(now);
+    while (r.link.Poll(1, &pkt, now)) r.a.OnPacket(Bytes(pkt), now);
+    while (r.link.Poll(2, &pkt, now)) r.b.OnPacket(Bytes(pkt), now);
+    r.Drain();
+    max_inflight = std::max<u64>(max_inflight, r.a.InFlight());
+  }
+  CHECK(max_inflight < initial);       // 场景确实是应用受限
+  CHECK(r.a.Cwnd() <= 2 * initial);    // 窗口没有被未经验证的 ACK 撑大
+  CHECK_EQ(r.Got(sid).size(), 1900u * 1400u);  // 数据照常送达
+}
