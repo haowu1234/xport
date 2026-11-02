@@ -40,6 +40,10 @@ struct TransportConfig {
   u64 drr_quantum = 4 * 1368;   // DRR 每轮每流额度（字节）
   Time min_rto_us = 200'000;    // RTO 下限：低于 200ms 会把排队抖动误判成丢包
   bool coalesce = true;         // 帧聚合开关（A/B 对照用）
+  // 接收端接受的最大流数（sid ∈ [0, max_streams)）。sid 来自线上，不设上限时
+  // 对端一个 sid 很大的包就能让本端 resize 出 GB 级的流表。越界帧丢弃并计 stream_limit。
+  // 最坏内存 ≈ max_streams × recv_window（每流环形缓冲在首个字节到达时分配）。
+  u32 max_streams = 256;
   CcConfig cc;
 };
 

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "test_framework.h"
+#include "xport/packet.h"
 #include "xport/sim.h"
 #include "xport/transport.h"
 
@@ -295,4 +296,40 @@ TEST(CubicDropsToBetaOnLossEvent) {
   // 乘性降窗比例必须落在 beta 附近（允许一个 RTT 内的窗口增长误差）
   const double ratio = double(cwnd_after) / double(cwnd_before);
   CHECK(ratio > 0.66 && ratio < 0.74);
+}
+
+// ---- 对端可控输入的边界 ----
+
+TEST(StreamIdBeyondLimitIsDropped) {
+  // sid 来自线上：一个 sid 很大的包不能让接收端 resize 出巨大的流表
+  LinkParams p;
+  SimLink link(p);
+  TransportConfig cfg;
+  cfg.max_streams = 8;
+  Transport t(link, 2, 1, cfg);
+
+  const auto deliver = [&](u32 sid, u64 pn) {
+    const u8 body[16] = {7};
+    u8 payload[kMaxPayload];
+    StreamFrame f;
+    f.sid = sid;
+    f.data = Bytes(body, sizeof body);
+    const std::size_t n = EncodeStream(MutBytes(payload, sizeof payload), f);
+    Header h;
+    h.pkt_num = pn;
+    h.payload_len = u16(n);
+    u8 pkt[kMtu];
+    const std::size_t hn = EncodeHeader(h, MutBytes(pkt, sizeof pkt));
+    std::memcpy(pkt + hn, payload, n);
+    t.OnPacket(Bytes(pkt, hn + n), Time(pn));
+  };
+
+  deliver(1'000'000, 1);
+  CHECK_EQ(t.stats().stream_limit, 1);
+  CHECK_EQ(t.RecvBufferSize(1'000'000), 0);
+  CHECK_EQ(t.ReadableBytes(1'000'000), 0);
+
+  deliver(7, 2);  // 上限内的最后一个 sid 正常收
+  CHECK_EQ(t.stats().stream_limit, 1);
+  CHECK_EQ(t.ReadableBytes(7), 16);
 }

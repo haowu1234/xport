@@ -498,6 +498,10 @@ void Transport::SlideRecvWindow(u64 shift) {
 
 void Transport::OnStream(const StreamFrame& f) {
   if (f.data.empty()) return;
+  if (f.sid >= cfg_.max_streams) {  // 先于 resize：sid 是对端可控的输入
+    ++stats_.stream_limit;
+    return;
+  }
   if (f.sid >= in_.size()) in_.resize(f.sid + 1);  // 对端 sid 从 0 连续分配
   InStream& st = in_[f.sid];
   if (st.ring.empty()) st.ring.resize(std::size_t(recv_window_), 0);  // 一次性预分配
