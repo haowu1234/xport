@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 770" width="960" height="770" role="img" aria-label="xport 协议架构：应用层、Transport、IoEndpoint、仿真与真实 socket 后端">
+<defs>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.6" flood-color="#0f172a" flood-opacity="0.07"/></filter>
+<marker id="arrow-94a3b8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+<marker id="arrow-2563eb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/></marker>
+<marker id="arrow-0d9488" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0d9488"/></marker>
+<marker id="arrow-d97706" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d97706"/></marker>
+<marker id="arrow-475569" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#475569"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="960.0" height="770.0" rx="0" fill="#ffffff"/>
+<text x="32.0" y="42.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="18" font-weight="700" fill="#0f172a" text-anchor="start">xport 协议架构</text>
+<text x="32.0" y="64.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="400" fill="#64748b" text-anchor="start">单线程 · 时间由调用方注入 · 仿真与真实 socket 走同一条代码路径</text>
+<rect x="800.6" y="30.0" width="127.4" height="18.0" rx="9" fill="#2563eb" fill-opacity="0.12"/>
+<text x="864.3" y="42.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="600" fill="#2563eb" text-anchor="middle">C++20 · 零第三方依赖</text>
+<rect x="32.0" y="86.0" width="896.0" height="64.0" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+<text x="50.0" y="112.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#475569" text-anchor="start" letter-spacing="0.6">APPLICATION</text>
+<text x="50.0" y="130.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="400" fill="#64748b" text-anchor="start">应用只看到字节流，不碰包</text>
+<rect x="294.0" y="101.0" width="150.0" height="34.0" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="306.0" y="116.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">OpenStream()</text>
+<text x="306.0" y="129.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">开流</text>
+<rect x="452.0" y="101.0" width="150.0" height="34.0" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="464.0" y="116.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Write(sid, bytes)</text>
+<text x="464.0" y="129.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">提交</text>
+<rect x="610.0" y="101.0" width="150.0" height="34.0" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="622.0" y="116.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Peek(sid)</text>
+<text x="622.0" y="129.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">零拷贝读</text>
+<rect x="768.0" y="101.0" width="150.0" height="34.0" rx="7" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+<text x="780.0" y="116.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Consume(sid, n)</text>
+<text x="780.0" y="129.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">归还窗口</text>
+<rect x="32.0" y="176.0" width="896.0" height="336.0" rx="14" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="50.0" y="202.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#2563eb" text-anchor="start" letter-spacing="0.6">TRANSPORT</text>
+<text x="50.0" y="220.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="400" fill="#64748b" text-anchor="start">无锁 · 热路径零堆分配 · 每包约 113 ns</text>
+<rect x="50.0" y="234.0" width="206.0" height="112.0" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#shadow)"/>
+<rect x="50.0" y="246.0" width="3.0" height="88.0" rx="1.5" fill="#2563eb"/>
+<text x="66.0" y="258.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="600" fill="#0f172a" text-anchor="start">多流调度</text>
+<rect x="184.4" y="245.0" width="59.6" height="18.0" rx="9" fill="#2563eb" fill-opacity="0.12"/>
+<text x="214.2" y="257.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="600" fill="#2563eb" text-anchor="middle">RFC 9000</text>
+<text x="66.0" y="278.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">DRR，按字节公平</text>
+<text x="66.0" y="295.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">帧聚合：每包最多 8 段</text>
+<text x="66.0" y="312.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">可跨流，小消息 pps ↓4×</text>
+<text x="66.0" y="329.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">max_streams = 256</text>
+<rect x="268.0" y="234.0" width="206.0" height="112.0" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#shadow)"/>
+<rect x="268.0" y="246.0" width="3.0" height="88.0" rx="1.5" fill="#2563eb"/>
+<text x="284.0" y="258.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="600" fill="#0f172a" text-anchor="start">可靠传输</text>
+<rect x="402.4" y="245.0" width="59.6" height="18.0" rx="9" fill="#2563eb" fill-opacity="0.12"/>
+<text x="432.2" y="257.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="600" fill="#2563eb" text-anchor="middle">RFC 9002</text>
+<text x="284.0" y="278.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">SACK 显式区间 ≤ 16 段</text>
+<text x="284.0" y="295.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">包阈值 3 + 时间阈值 9/8</text>
+<text x="284.0" y="312.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">PTO 探测 · 指数退避</text>
+<text x="284.0" y="329.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">重传换新包号</text>
+<rect x="486.0" y="234.0" width="206.0" height="112.0" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#shadow)"/>
+<rect x="486.0" y="246.0" width="3.0" height="88.0" rx="1.5" fill="#2563eb"/>
+<text x="502.0" y="258.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="600" fill="#0f172a" text-anchor="start">拥塞控制</text>
+<rect x="620.4" y="245.0" width="59.6" height="18.0" rx="9" fill="#2563eb" fill-opacity="0.12"/>
+<text x="650.2" y="257.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="600" fill="#2563eb" text-anchor="middle">RFC 9438</text>
+<text x="502.0" y="278.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">CUBIC + 快速收敛</text>
+<text x="502.0" y="295.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">HyStart++ 慢启动退出</text>
+<text x="502.0" y="312.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">令牌桶 pacing</text>
+<text x="502.0" y="329.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">cwnd 验证 · 持续拥塞</text>
+<rect x="704.0" y="234.0" width="206.0" height="112.0" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#shadow)"/>
+<rect x="704.0" y="246.0" width="3.0" height="88.0" rx="1.5" fill="#2563eb"/>
+<text x="720.0" y="258.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="600" fill="#0f172a" text-anchor="start">流控</text>
+<text x="720.0" y="278.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">MAX_DATA 连接级窗口</text>
+<text x="720.0" y="295.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">随每个 ACK 捎带</text>
+<text x="720.0" y="312.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">消费式：已消费 + 窗口</text>
+<text x="720.0" y="329.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">PING 探测防死锁</text>
+<text x="50.0" y="368.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="600" fill="#2563eb" text-anchor="start">数据结构</text>
+<rect x="50.0" y="378.0" width="206.0" height="46.0" rx="7" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="62.0" y="397.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">sent_ring_[8192]</text>
+<text x="62.0" y="414.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#64748b" text-anchor="start">在途包，pn &amp; mask 定位</text>
+<rect x="268.0" y="378.0" width="206.0" height="46.0" rx="7" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="280.0" y="397.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">RangeSet</text>
+<text x="280.0" y="414.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#64748b" text-anchor="start">定长区间合并</text>
+<rect x="486.0" y="378.0" width="206.0" height="46.0" rx="7" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="498.0" y="397.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">recv_bits_ 16384 bit</text>
+<text x="498.0" y="414.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#64748b" text-anchor="start">滑动位图记包号</text>
+<rect x="704.0" y="378.0" width="206.0" height="46.0" rx="7" fill="#ffffff" stroke="#bfdbfe" stroke-width="1"/>
+<text x="716.0" y="397.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">ring buffer / 流</text>
+<text x="716.0" y="414.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#64748b" text-anchor="start">接收窗口，Peek 零拷贝</text>
+<text x="50.0" y="454.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">包头 · 20 B 定长</text>
+<text x="510.0" y="454.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#94a3b8" text-anchor="end">CRC32C 低 16 位，覆盖前 18 B</text>
+<rect x="50.5" y="462.0" width="22.0" height="26.0" rx="3" fill="#475569" fill-opacity="0.14"/>
+<text x="61.5" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="8.5" font-weight="600" fill="#475569" text-anchor="middle">ver</text>
+<rect x="73.5" y="462.0" width="22.0" height="26.0" rx="3" fill="#475569" fill-opacity="0.14"/>
+<text x="84.5" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="8.5" font-weight="600" fill="#475569" text-anchor="middle">type</text>
+<rect x="96.5" y="462.0" width="45.0" height="26.0" rx="3" fill="#94a3b8" fill-opacity="0.14"/>
+<text x="119.0" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9.5" font-weight="600" fill="#94a3b8" text-anchor="middle">flags</text>
+<rect x="142.5" y="462.0" width="91.0" height="26.0" rx="3" fill="#0d9488" fill-opacity="0.14"/>
+<text x="188.0" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9.5" font-weight="600" fill="#0d9488" text-anchor="middle">dst_cid</text>
+<rect x="234.5" y="462.0" width="183.0" height="26.0" rx="3" fill="#2563eb" fill-opacity="0.14"/>
+<text x="326.0" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9.5" font-weight="600" fill="#2563eb" text-anchor="middle">pkt_num · 64 bit</text>
+<rect x="418.5" y="462.0" width="45.0" height="26.0" rx="3" fill="#7c3aed" fill-opacity="0.14"/>
+<text x="441.0" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9.5" font-weight="600" fill="#7c3aed" text-anchor="middle">len</text>
+<rect x="464.5" y="462.0" width="45.0" height="26.0" rx="3" fill="#d97706" fill-opacity="0.14"/>
+<text x="487.0" y="479.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9.5" font-weight="600" fill="#d97706" text-anchor="middle">crc16</text>
+<text x="50.0" y="502.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9" font-weight="400" fill="#94a3b8" text-anchor="middle">0</text>
+<text x="142.0" y="502.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9" font-weight="400" fill="#94a3b8" text-anchor="middle">4</text>
+<text x="234.0" y="502.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9" font-weight="400" fill="#94a3b8" text-anchor="middle">8</text>
+<text x="418.0" y="502.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9" font-weight="400" fill="#94a3b8" text-anchor="middle">16</text>
+<text x="510.0" y="502.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="9" font-weight="400" fill="#94a3b8" text-anchor="middle">20</text>
+<text x="550.0" y="454.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="600" fill="#0f172a" text-anchor="start">帧类型</text>
+<rect x="550.0" y="462.0" width="50.0" height="18.0" rx="9" fill="#2563eb" fill-opacity="0.12"/>
+<text x="575.0" y="474.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="600" fill="#2563eb" text-anchor="middle">STREAM</text>
+<rect x="608.0" y="462.0" width="32.0" height="18.0" rx="9" fill="#0d9488" fill-opacity="0.12"/>
+<text x="624.0" y="474.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="600" fill="#0d9488" text-anchor="middle">ACK</text>
+<rect x="648.0" y="462.0" width="62.0" height="18.0" rx="9" fill="#7c3aed" fill-opacity="0.12"/>
+<text x="679.0" y="474.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="600" fill="#7c3aed" text-anchor="middle">MAX_DATA</text>
+<rect x="718.0" y="462.0" width="38.0" height="18.0" rx="9" fill="#d97706" fill-opacity="0.12"/>
+<text x="737.0" y="474.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="600" fill="#d97706" text-anchor="middle">PING</text>
+<text x="550.0" y="504.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="400" fill="#94a3b8" text-anchor="start">语义对齐 QUIC，线格式自研，不与标准 QUIC 互通</text>
+<rect x="32.0" y="540.0" width="896.0" height="64.0" rx="14" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1"/>
+<text x="50.0" y="566.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#0d9488" text-anchor="start" letter-spacing="0.6">IO ENDPOINT</text>
+<text x="50.0" y="584.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="400" fill="#64748b" text-anchor="start">唯一的网络边界，接口只有三个</text>
+<rect x="294.0" y="555.0" width="210.0" height="34.0" rx="7" fill="#ffffff" stroke="#99f6e4" stroke-width="1"/>
+<text x="306.0" y="570.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Send(Bytes, Time now)</text>
+<text x="306.0" y="583.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">允许失败 = 丢包</text>
+<rect x="512.0" y="555.0" width="222.0" height="34.0" rx="7" fill="#ffffff" stroke="#99f6e4" stroke-width="1"/>
+<text x="524.0" y="570.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Recv(Batch*, Time now)</text>
+<text x="524.0" y="583.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">非阻塞批量收</text>
+<rect x="742.0" y="555.0" width="170.0" height="34.0" rx="7" fill="#ffffff" stroke="#99f6e4" stroke-width="1"/>
+<text x="754.0" y="570.0" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" font-weight="600" fill="#0f172a" text-anchor="start">Now()</text>
+<text x="754.0" y="583.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="9.5" font-weight="400" fill="#94a3b8" text-anchor="start">虚拟时钟 / 单调时钟</text>
+<rect x="32.0" y="634.0" width="438.0" height="94.0" rx="14" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+<text x="50.0" y="660.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="#0f172a" text-anchor="start">SimLink · 确定性仿真</text>
+<rect x="396.0" y="646.0" width="56.0" height="18.0" rx="9" fill="#d97706" fill-opacity="0.12"/>
+<text x="424.0" y="658.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">测正确性</text>
+<text x="50.0" y="682.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">虚拟时钟 · 固定种子 · 逐位可复现</text>
+<text x="50.0" y="698.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">带宽 / 延迟 / 抖动 / 队列 / 丢包 / 重复</text>
+<text x="50.0" y="714.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">CUBIC 曲线与 Python 独立回算对照</text>
+<rect x="490.0" y="634.0" width="438.0" height="94.0" rx="14" fill="#fffbeb" stroke="#fde68a" stroke-width="1"/>
+<text x="508.0" y="660.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="#0f172a" text-anchor="start">UdpSocket · 真实网络</text>
+<rect x="864.5" y="646.0" width="45.5" height="18.0" rx="9" fill="#d97706" fill-opacity="0.12"/>
+<text x="887.2" y="658.6" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">测性能</text>
+<text x="508.0" y="682.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">Winsock / BSD socket · 非阻塞轮询</text>
+<text x="508.0" y="698.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">回环实测单流约 3.5 Gbps（裸 UDP 的 63%）</text>
+<text x="508.0" y="714.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="11" font-weight="400" fill="#64748b" text-anchor="start">瓶颈在 syscall：下一步批量收发 / GSO</text>
+<line x1="480.0" y1="150.0" x2="480.0" y2="174.0" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow-475569)"/>
+<line x1="480.0" y1="512.0" x2="480.0" y2="538.0" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-2563eb)"/>
+<line x1="251.0" y1="604.0" x2="251.0" y2="632.0" stroke="#0d9488" stroke-width="1.6" marker-end="url(#arrow-0d9488)"/>
+<line x1="709.0" y1="604.0" x2="709.0" y2="632.0" stroke="#0d9488" stroke-width="1.6" marker-end="url(#arrow-0d9488)"/>
+<text x="928.0" y="756.0" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="10.5" font-weight="400" fill="#94a3b8" text-anchor="end">Transport 不认识网络：只有把时间从外部注入，仿真才可能 100% 确定</text>
+<rect x="0.5" y="0.5" width="959.0" height="769.0" rx="12" fill="none" stroke="#e2e8f0" stroke-width="1"/>
+</svg>

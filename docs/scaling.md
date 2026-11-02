@@ -211,7 +211,7 @@ cd D:/work/xport
 
 ```bash
 cd D:/work/xport
-./scripts/quickbuild.sh          # 40 个测试
+./scripts/quickbuild.sh          # 43 个测试
 ./build/xport_cpubench           # 单包成本 / ACK 成本 / 带宽折算
 ./build/xport_bench              # 含矩阵 H：帧聚合 A/B
 ```
@@ -332,7 +332,7 @@ cd D:/work/xport
 ## 10.5 复现
 
 ```bash
-./scripts/quickbuild.sh     # 40 个测试（含消费式路径的逐字节校验）
+./scripts/quickbuild.sh     # 43 个测试（含消费式路径的逐字节校验）
 ./build/xport_cpubench      # 接收路径 421 ns/包
 ./build/xport_bench         # 矩阵全部 OK
 ./build/xport_demo --mb 8 --loss 1

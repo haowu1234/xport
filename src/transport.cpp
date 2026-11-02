@@ -76,30 +76,11 @@ void Transport::Forget(u64 pn) {
 }
 
 void Transport::Tick(Time now) {
-  // 1) RTO：最老的未确认包超时，重传它的全部数据段（不做逐包定时器）
-  AdvanceOldest();
-  if (oldest_pn_ < next_pn_ && InUse(oldest_pn_)) {
-    const Sent& s = Slot(oldest_pn_);
-    if (now >= s.t && now - s.t > Rto()) {
-      const u64 pn = oldest_pn_;
-      const Time sent_t = s.t;
-      const u32 n = s.seg_count;
-      Seg segs[kMaxSegsPerPacket];
-      for (u32 i = 0; i < n; ++i) segs[i] = s.segs[i];
-#ifdef XPORT_DEBUG
-      std::fprintf(stderr, "[rto] t=%llums pn=%llu segs=%u age=%.1fms rto=%.1fms cwnd=%.1fKB\n",
-                   (unsigned long long)(now / 1000), (unsigned long long)pn, n,
-                   double(now - sent_t) / 1000.0, double(Rto()) / 1000.0,
-                   double(cc_.cwnd()) / 1024.0);
-#endif
-      Forget(pn);
-      for (u32 i = 0; i < n; ++i) {
-        retransmit_.emplace_back(segs[i].sid, segs[i].off, segs[i].len);
-      }
-      ++stats_.lost;
-      ++stats_.rto_fires;
-      if (!cc_.InRecovery(sent_t)) cc_.OnCongestion(now);
-    }
+  // 1) PTO：最后一个数据包发出后 PtoBackoff() 内没有任何确认 → 发探测包。
+  //    计时从"最后一次发出数据包"算起，持续发送时它会不断后移，所以只在发送停顿
+  //    （尾部丢包、整窗丢失、ACK 全丢）时才会触发。
+  if (inflight_pkts_ > 0 && now >= last_send_t_ && now - last_send_t_ >= PtoBackoff()) {
+    OnPtoTimeout();
   }
 
   // 2) ACK 合并窗口到期
@@ -108,7 +89,7 @@ void Transport::Tick(Time now) {
   // 3) 流控死锁探测：被流控挡住、且没有任何在途包可触发对端回 ACK 时，
   //    只能主动发 PING 把对方"敲醒"，让对方带着新的 MAX_DATA 回 ACK。
   if (flow_blocked_ && inflight_pkts_ == 0 && now >= flow_blocked_since_ &&
-      now - flow_blocked_since_ >= Rto()) {
+      now - flow_blocked_since_ >= PtoBackoff()) {
     SendProbe(now);
     flow_blocked_since_ = now;
     ++stats_.flow_probes;
@@ -120,7 +101,7 @@ void Transport::Tick(Time now) {
   stats_.srtt_ms = srtt_us_ / 1000.0;
   stats_.cwnd_kb = double(cc_.cwnd()) / 1024.0;
   stats_.ssthresh_kb = double(cc_.ssthresh()) / 1024.0;
-  stats_.rto_ms = double(Rto()) / 1000.0;
+  stats_.pto_ms = double(PtoBackoff()) / 1000.0;
   stats_.pacing_mbps =
       double(cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000)) * 8.0 / 1e6;
 }
@@ -225,7 +206,7 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
   std::memcpy(buf + hn, payload, plen);
 
   cc_.OnPacketSent(h.pkt_num);
-  // 发送失败不是异常，而是又一个丢包源：登记在途，交给 RTO 重传。
+  // 发送失败不是异常，而是又一个丢包源：登记在途，交给丢包检测 / PTO 重传。
   // 但必须计数——静默的本地丢弃和链路丢包在现象上一模一样，没有计数器就查不出来。
   if (!io_.Send(Bytes(buf, hn + plen), now)) ++stats_.send_fail;
 
@@ -235,6 +216,9 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
   s.bytes = bytes;
   s.seg_count = u8(nseg);
   s.used = true;
+  s.acked = false;
+  last_send_t_ = now;
+  if (probe_budget_ > 0) --probe_budget_;
   for (u32 i = 0; i < nseg; ++i) s.segs[i] = segs[i];
 
   ++inflight_pkts_;
@@ -319,7 +303,8 @@ void Transport::SendData(Time now) {
 
   for (int guard = 0; guard < 8192; ++guard) {
     // 拥塞窗口：留一个满包的余量
-    if (inflight_ + batch_bytes + kMaxStreamPayload > cwnd) break;
+    // PTO 探测包不受 cwnd 约束（RFC 9002 §7.5）：窗口满了也必须发出去
+    if (inflight_ + batch_bytes + kMaxStreamPayload > cwnd && probe_budget_ == 0) break;
     if (inflight_pkts_ >= kSentRing) break;  // 环形数组满，必须先等 ACK
 
     // 1) 重传优先：恢复期若被新数据挤占窗口，丢包会长时间补不上
@@ -333,7 +318,7 @@ void Transport::SendData(Time now) {
         retransmit_.pop_front();
         continue;
       }
-      if (tokens_ < double(rlen)) break;
+      if (tokens_ < double(rlen) && probe_budget_ == 0) break;
       tokens_ -= double(rlen);
       retransmit_.pop_front();
       SendStreamPacket(rsid, roff, rlen, now, true);
@@ -401,7 +386,8 @@ void Transport::SendData(Time now) {
       break;
     }
 
-    if (tokens_ < double(len)) break;  // 令牌不足：等下一轮 Tick，不逐包定时
+    // 令牌不足：等下一轮 Tick，不逐包定时（PTO 探测包除外）
+    if (tokens_ < double(len) && probe_budget_ == 0) break;
     tokens_ -= double(len);
 
     // 4) 编进当前包。装得下就继续拼下一段，装不下就下一轮 flush。
@@ -584,6 +570,7 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   const bool cwnd_limited = cc_.IsCwndLimited(inflight_);
   u64 acked_bytes = 0;
   u64 max_acked_pn = 0;
+  bool newly_acked = false;
   u64 sample = 0;
 
   // 只为"最大被确认包"采样。每个重传用新包号，所以样本不会像 TCP 那样有歧义。
@@ -624,11 +611,18 @@ void Transport::OnAck(const AckFrame& a, Time now) {
       }
       acked_bytes += s.bytes;
       if (pn > max_acked_pn) max_acked_pn = pn;
+      s.acked = true;
+      newly_acked = true;
       Forget(pn);
     }
   }
 
-  if (sample > 0) UpdateRtt(sample);
+  if (sample > 0) {
+    if (!has_rtt_) first_rtt_t_ = now;
+    UpdateRtt(sample);
+  }
+  // 有新包被确认，说明路径通了：退避清零（RFC 9002 §6.2.1）
+  if (newly_acked) pto_count_ = 0;
   // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
   cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
             has_rtt_ ? u64(srtt_us_) : 0, sample, cwnd_limited);
@@ -644,10 +638,19 @@ void Transport::DetectLoss(Time now) {
   const double srtt = has_rtt_ ? srtt_us_ : 100000.0;
   const Time time_threshold = std::max<Time>(Time(srtt * 1.125), 2000);
   bool congested = false;
+  // 持续拥塞候选：本次判丢的包里，首个 RTT 样本之后发出的最早 / 最晚那个
+  bool pc_any = false;
+  u64 pc_lo_pn = 0, pc_hi_pn = 0;
+  Time pc_lo_t = 0, pc_hi_t = 0;
 
   const auto declare_lost = [&](u64 pn) {
     Sent& s = Slot(pn);
     const Time t = s.t;
+    if (has_rtt_ && t >= first_rtt_t_) {
+      if (!pc_any || pn < pc_lo_pn) { pc_lo_pn = pn; pc_lo_t = t; }
+      if (!pc_any || pn > pc_hi_pn) { pc_hi_pn = pn; pc_hi_t = t; }
+      pc_any = true;
+    }
     const u32 n = s.seg_count;
     Seg segs[kMaxSegsPerPacket];
     for (u32 i = 0; i < n; ++i) segs[i] = s.segs[i];
@@ -688,6 +691,55 @@ void Transport::DetectLoss(Time now) {
   }
 
   if (congested) cc_.OnCongestion(now);
+
+  // 持续拥塞（RFC 9002 §7.6）：丢失的包横跨了 threshold × PTO，且中间没有任何包被确认，
+  // 说明这段时间路径整体不通。这时一次 β 降窗不够，窗口要回到最小值重新慢启动。
+  // 中间有没有被确认的包，按包号区间查 acked 标记；只有跨度已经够长时才扫，平时不花成本。
+  if (pc_any && pc_hi_pn > pc_lo_pn &&
+      pc_hi_t - pc_lo_t > Time(cfg_.persistent_congestion_threshold) * Pto()) {
+    bool gap_acked = false;
+    const u64 hi = std::min<u64>(pc_hi_pn, pc_lo_pn + kSentRing);
+    for (u64 pn = pc_lo_pn + 1; pn < hi; ++pn) {
+      const Sent& s = Slot(pn);
+      if (s.pn == pn && s.acked) {
+        gap_acked = true;
+        break;
+      }
+    }
+    if (!gap_acked) {
+      cc_.OnPersistentCongestion(now);
+      ++stats_.persistent_congestion;
+    }
+  }
+}
+
+void Transport::OnPtoTimeout() {
+  ++pto_count_;
+  ++stats_.pto_fires;
+
+  // 探测内容的优先级：已判丢待重传的数据 > 新数据 > 最老在途包的数据。
+  // 前两种 SendData 本来就会发，这里只处理"什么都没得发"的尾部丢包：把最老的两个
+  // 在途包的数据段排到重传队列最前面。原包仍留在在途表里——它可能只是 ACK 慢了，
+  // 哪份先被确认都行，另一份出队时会按 acked 区间去重。
+  if (retransmit_.empty() && !HasUnsentData()) {
+    u32 picked = 0;
+    for (u64 pn = oldest_pn_; pn < next_pn_ && picked < 2; ++pn) {
+      if (!InUse(pn)) continue;
+      const Sent& s = Slot(pn);
+      for (u32 i = s.seg_count; i > 0; --i) {
+        retransmit_.emplace_front(s.segs[i - 1].sid, s.segs[i - 1].off, s.segs[i - 1].len);
+      }
+      ++picked;
+    }
+  }
+  probe_budget_ = 2;  // RFC 9002 §6.2.4：每次 PTO 最多两个探测包
+}
+
+bool Transport::HasUnsentData() const {
+  for (const auto& st : out_) {
+    if (st.next_off < st.data.size() && sent_high_water_ + 1 <= flow_max_) return true;
+  }
+  return false;
 }
 
 void Transport::UpdateRtt(Time sample_us) {
@@ -703,16 +755,20 @@ void Transport::UpdateRtt(Time sample_us) {
   srtt_us_ = 0.875 * srtt_us_ + 0.125 * s;
 }
 
-Time Transport::Rto() const {
-  // 还没有 RTT 样本时必须用保守的初始值（RFC 6298：1 s）。
-  // 早期版本用 90 ms，在 RTT=100 ms 的链路上每个包都会在 ACK 到达前被判超时，
-  // 于是每个 RTT 降一次窗，cwnd 三次后就塌到最小值——链路完全跑不动。
+Time Transport::Pto() const {
+  // 还没有 RTT 样本时用保守初值 1 s（RFC 9002 的 kInitialRtt = 333 ms 推出来也是约 1 s）。
+  // 早期版本用 90 ms，在 RTT=100 ms 的链路上每个包都会在 ACK 到达前超时。
   if (!has_rtt_) return 1'000'000;
+  const double g = double(cfg_.timer_granularity_us);
+  return Time(srtt_us_ + std::max(4.0 * rttvar_us_, g) + double(cfg_.ack_delay_us));
+}
 
-  // G（时钟粒度）取 4 ms：仿真与真实内核的定时器粒度都远大于 1 ms，
-  // 用 1 ms 会让 RTO 贴着实测 RTT，排队抖动一来就误判超时。
-  const double rto = srtt_us_ + std::max(4.0 * rttvar_us_, 4000.0) + double(cfg_.ack_delay_us);
-  return std::max<Time>(Time(rto), cfg_.min_rto_us);
+Time Transport::PtoBackoff() const {
+  constexpr Time kMaxPto = 60'000'000;  // 退避上限 60 s，与 RFC 6298 的 RTO 上限一致
+  const Time base = Pto();
+  const u32 shift = std::min<u32>(pto_count_, 30);
+  if (base > (kMaxPto >> shift)) return kMaxPto;
+  return base << shift;
 }
 
 bool Transport::SendComplete() const {

@@ -41,12 +41,13 @@ struct Stats {
   u64 ack_overflow = 0;   // 确认区间表溢出、改走重传的次数
   u64 rx_overflow = 0;    // 收到的数据越过接收窗口（对端越界，包被丢弃）
   u64 stream_limit = 0;   // 收到 sid 超出 max_streams 的帧（对端越界，帧被丢弃）
-  u64 rto_fires = 0;      // RTO 触发次数（区别于"判定丢失"：这是真超时）
+  u64 pto_fires = 0;      // PTO 超时次数（只发探测包，不判丢、不降窗）
+  u64 persistent_congestion = 0;  // 持续拥塞次数（窗口回到最小值）
   u64 send_fail = 0;      // 本地 socket 发送失败（缓冲满/无路由），等价于链路丢包
   double srtt_ms = 0.0;
   double cwnd_kb = 0.0;
   double ssthresh_kb = 0.0;
-  double rto_ms = 0.0;
+  double pto_ms = 0.0;    // 当前生效的 PTO（含退避）
   double pacing_mbps = 0.0;
 };
 

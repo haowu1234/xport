@@ -3,7 +3,7 @@
 **基于 UDP 的 C++20 可靠传输框架** — 可靠 · 有序 · 多流复用 · 零第三方依赖
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
-![tests](https://img.shields.io/badge/tests-40%20passing-3fb950)
+![tests](https://img.shields.io/badge/tests-43%20passing-3fb950)
 ![dependencies](https://img.shields.io/badge/dependencies-none-3fb950)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-6e7781)
 ![status](https://img.shields.io/badge/status-M3%20runnable-blue)
@@ -26,22 +26,9 @@
 
 ## 架构
 
-```mermaid
-flowchart LR
-    APP["应用层<br/>Write · Peek · Consume"] --> SCHED
+![xport 协议架构](docs/figs/architecture.svg)
 
-    subgraph T["Transport · 无锁"]
-        SCHED["多流调度 DRR<br/>按字节公平"] --> REL["可靠传输<br/>SACK 区间 · RTO/PTO"]
-        REL --> CC["拥塞控制<br/>CUBIC · HyStart++ · pacing"]
-        CC --> FC["流控<br/>MAX_DATA 窗口"]
-    end
-
-    FC --> IO["IoEndpoint<br/>Send(Bytes, Time) / Recv(Batch)"]
-    IO --> SIM["SimLink<br/>虚拟时钟 · 固定种子"]
-    IO --> UDP["UdpSocket<br/>Winsock / BSD socket"]
-    SIM --> R1["确定性复现<br/>理论曲线对照"]
-    UDP --> R2["回环 / 真实网卡"]
-```
+<sub>图由 <code>scripts/plot_arch.py</code> 生成，常量与源码一致；改结构时同步更新脚本。</sub>
 
 **分层原则**：`Transport` 不认识网络。它只依赖 `IoEndpoint` 的
 `Send(Bytes, Time)` 与 `Recv(Batch*, Time)`，所以"跑仿真"和"跑真 socket"是同一条代码路径。
@@ -65,7 +52,7 @@ git clone https://github.com/haowu1234/xport.git && cd xport
 # B. CMake
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/tests/xport_tests        # 40 个用例
+./build/tests/xport_tests        # 43 个用例
 ./build/apps/xport_demo --mb 16 --streams 4 --loss 2
 ```
 
@@ -113,7 +100,7 @@ cmake --build build --config Release
 | 8 条并发流 16 MiB | 864.6 Mbps | 报文更碎，调度开销上升 |
 | 小消息 1600 × 200 B | **400 个包** | 帧聚合开启；关闭时需 1600 个包 |
 | 1% 真实丢包 | 463.7 Mbps | 重传 32 包即恢复 |
-| 2% 真实丢包 | **49.8 Mbps** | 19 次 RTO 停顿 —— 缺 PTO，见下 |
+| 2% 真实丢包 | **49.8 Mbps** | 19 次 RTO 停顿 —— 缺 PTO，见下（**已修复**，见 ②） |
 
 ![丢包率与吞吐](docs/figs/loss-cliff.svg)
 
@@ -134,6 +121,19 @@ cmake --build build --config Release
 完全由 RTO 次数决定（RTO=0 → 448 Mbps，RTO=16 → 71 Mbps）。
 **这个缺陷只有真实 socket 能暴露** —— 仿真里 RTT 是 2–800 ms，200 ms 的下限从来不是瓶颈。
 
+**已修复：RTO 换成 PTO（RFC 9002 §6.2）。** 超时只发两个探测包、不判丢、不降窗，所以去掉了 200 ms 下限；
+连续超时指数退避（上限 60 s）；丢包跨度超过 3×PTO 且中间无确认时判持续拥塞，窗口回到最小值。
+同一台机器（Apple M5，回环，各 7 次取中位数）前后对比：
+
+| 丢包率 | 修复前 | PTO | 超时次数（中位数） |
+|---:|---:|---:|---:|
+| 0% / 1% | 3571 / 1379 Mbps | 3573 / 1386 Mbps | 0 → 0 |
+| 2% | 405 Mbps（87–1032，双峰） | **1013 Mbps**（955–1027） | 4 → 0 |
+| 5% | 5.6 Mbps | **541 Mbps** | 542 → 24 |
+| 10% | 1.8 Mbps | **279 Mbps** | 291 → 35 |
+
+（这台机器比上表那台快约 4 倍，绝对值不可横比，看同机前后即可。）
+
 ### 确定性仿真
 
 200 Mbps 链路、RTT 2 ms、8 MiB 数据：
@@ -145,7 +145,7 @@ $ ./build/xport_demo --mb 8 --loss 1
  拥塞窗口      17.2 KB  (ssthresh 7.8 KB)
  拥塞控制      cubic · cong-avoid · 事件 55 次 · pacing 85 Mbps
  流控          MAX_DATA 上限 10240.0 KB · 已发 8192.0 KB · 阻塞 0 次
- SRTT          2.07 ms   (RTO 200.0 ms)
+ SRTT          2.07 ms   (PTO 5.1 ms · 超时 0 次)
  校验          [OK] 逐字节一致  8388608 字节
 ```
 
@@ -164,7 +164,7 @@ $ ./build/xport_demo --mb 32 --loss 0
 | 稳态 ACK 成本 | **0.4–1.0 µs，与在途包数无关** | 优化前 16→4096 包涨 61 倍（0.8→49 µs） |
 | 热路径堆分配 | **0 次/包** | 区间表、包号位图、流表全换定长结构 |
 | 接收缓冲落地 | 0.49 → **0.03 ns/B** | 每流预分配环形缓冲，8 Gbps 单流仅占单核 29% |
-| 回环 RTT | **9.0 µs**（64 B ping-pong） | 决定了 200 ms 的 RTO 下限是 RTT 的 1300 倍 |
+| 回环 RTT | **9.0 µs**（64 B ping-pong） | 旧的 200 ms RTO 下限是 RTT 的 1300 倍（现已换成 PTO） |
 
 ### 拥塞控制
 
@@ -207,7 +207,8 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | ACK | ✅ | **显式区间**（最多 16 段），不是位图窗口 |
 | 包级可靠传输 | ✅ | 滑动窗口 + 包阈值 3 + 时间阈值 1.125×RTT |
 | 恢复期去重 | ✅ | 降窗前发出的包再丢不算新事件，避免一次拥塞被反复砍 |
-| RTO 与重传 | ✅ | RFC 6298：初始 1 s、下限 200 ms；重传按 offset 去重 |
+| PTO 与重传 | ✅ | RFC 9002 §6.2：SRTT + max(4·RTTVAR, 1 ms) + ack_delay，无下限；超时发 2 个探测包、不降窗；指数退避；重传按 offset 去重 |
+| 持续拥塞 | ✅ | RFC 9002 §7.6：丢包跨度 > 3×PTO 且中间无确认 → 窗口回到最小值 |
 | 流级重组 | ✅ | 区间合并、乱序缓存、重复包幂等 |
 | 接收缓冲生命周期 | ✅ | **消费式**：环形缓冲 + `Peek` 零拷贝 + `Consume` 归还 |
 | 多流复用 | ✅ | **DRR**，按字节公平 |
@@ -220,7 +221,6 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | 握手 / CID 协商 / cookie | ❌ | 当前两端静态配对，窗口由配置约定 |
 | 加密 | ❌ | v1 明文 |
 | 批量收发 | ❌ | 每包一次 `send`/`recv`，真实链路上的第一瓶颈 |
-| PTO | ❌ | 只有 RTO；低 RTT 链路上 200 ms 下限会主导耗时 |
 | GSO / GRO | ❌ | 帧聚合已在协议层就绪，缺内核 offload 那部分收益 |
 
 ---
@@ -239,7 +239,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 9. **流控窗口同时是内存预算**。`initial_max_data` 决定环形缓冲要分配多少。曾有基准把它设成 1 TB 来"关掉流控"，改造后直接 `bad_alloc`；现在硬夹到 1 GB，越界写有 `rx_overflow` 兜底。
 10. **仿真器是独立库，不是测试代码**。固定种子 100% 可复现，把"偶发丢包导致的 bug"变成可调试的确定性问题 —— 上面一半缺陷是这样定位的。
 11. **IO 端点不能自己缓存时间**。`Send` 没带 `now` 时仿真端点用了缓存的 `now_`（初值 0），所有包时间戳停在 0，RTO 成批触发，36 个测试里 7 个丢包用例全线失败。**时间必须由驱动方给，端点不许自己记。**
-12. **RTO 下限在低 RTT 链路上会变成主导项**。200 ms 在 RTT 2 ms 的仿真里是安全网，在 RTT 0.15 ms 的回环上等于让传输反复睡 200 ms。正解是 QUIC 的 PTO（几个 RTT 的探测包，超时不降窗）。
+12. **RTO 下限在低 RTT 链路上会变成主导项**。200 ms 在 RTT 2 ms 的仿真里是安全网，在 RTT 0.15 ms 的回环上等于让传输反复睡 200 ms。正解是 QUIC 的 PTO（几个 RTT 的探测包，超时不降窗）——已按此实现，5% 丢包回环吞吐从 5.6 Mbps 回到 541 Mbps。
 13. **回环验证不了拥塞控制**。回环没有队列、没有带宽限制、没有随机丢包，cwnd 一路涨到上限；每包一次 syscall 让实际在途只有 10 KB，远小于 BDP。回环能验证正确性与单核处理能力，拥塞控制只能靠确定性仿真。
 
 </details>
@@ -307,13 +307,13 @@ python scripts/plot_readme.py
 
 | # | 事项 | 为什么现在是它 |
 |---|---|---|
-| 1 | **PTO（探测超时）** | 把窗口尾部落丢的恢复从 200 ms 压到 ~2×RTT。回环数据已证明这是低 RTT 链路的最大单点，改动局限在丢包检测，不碰拥塞控制 |
-| 2 | **批量收发** | Windows `WSASendMsg` + IOCP 预投，Linux `sendmmsg`/`recvmmsg`。批量 32 能把 10 µs/包 摊掉一个数量级，是突破 1 Gbps 单流的唯一杠杆 |
-| 3 | **真实网卡 bench** | 回环测的是 syscall 成本，真实网卡还要加中断、DMA、GRO。到那一步才有"单流 6–7 Gbps"的结论 |
-| 4 | **`tc netem` 故障注入 + 24h 长稳 + 与 msquic 对比** | 拿到可信的工程结论，而不是"跑得快" |
+| ✅ | ~~PTO（探测超时）~~ | 已完成：5% 丢包回环吞吐 5.6 → 541 Mbps，见「真实 socket · 本机回环」② |
+| 1 | **批量收发** | Windows `WSASendMsg` + IOCP 预投，Linux `sendmmsg`/`recvmmsg`。批量 32 能把 10 µs/包 摊掉一个数量级，是突破 1 Gbps 单流的唯一杠杆 |
+| 2 | **真实网卡 bench** | 回环测的是 syscall 成本，真实网卡还要加中断、DMA、GRO。到那一步才有"单流 6–7 Gbps"的结论 |
+| 3 | **`tc netem` 故障注入 + 24h 长稳 + 与 msquic 对比** | 拿到可信的工程结论，而不是"跑得快" |
 
 ---
 
 <div align="center">
-<sub>协议语义对齐 QUIC / RFC 9000 · 9438 · 9406 · 6298，实现与线格式独立</sub>
+<sub>协议语义对齐 QUIC / RFC 9000 · 9002 · 9438 · 9406，实现与线格式独立</sub>
 </div>
