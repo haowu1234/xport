@@ -26,22 +26,9 @@
 
 ## 架构
 
-```mermaid
-flowchart LR
-    APP["应用层<br/>Write · Peek · Consume"] --> SCHED
+![xport 协议架构](docs/figs/architecture.svg)
 
-    subgraph T["Transport · 无锁"]
-        SCHED["多流调度 DRR<br/>按字节公平"] --> REL["可靠传输<br/>SACK 区间 · RTO/PTO"]
-        REL --> CC["拥塞控制<br/>CUBIC · HyStart++ · pacing"]
-        CC --> FC["流控<br/>MAX_DATA 窗口"]
-    end
-
-    FC --> IO["IoEndpoint<br/>Send(Bytes, Time) / Recv(Batch)"]
-    IO --> SIM["SimLink<br/>虚拟时钟 · 固定种子"]
-    IO --> UDP["UdpSocket<br/>Winsock / BSD socket"]
-    SIM --> R1["确定性复现<br/>理论曲线对照"]
-    UDP --> R2["回环 / 真实网卡"]
-```
+<sub>图由 <code>scripts/plot_arch.py</code> 生成，常量与源码一致；改结构时同步更新脚本。</sub>
 
 **分层原则**：`Transport` 不认识网络。它只依赖 `IoEndpoint` 的
 `Send(Bytes, Time)` 与 `Recv(Batch*, Time)`，所以"跑仿真"和"跑真 socket"是同一条代码路径。
