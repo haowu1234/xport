@@ -83,8 +83,11 @@ class CubicCc {
     return phase_ != CcPhase::kCongAvoid && double(inflight) * 2.0 > cwnd_;
   }
 
-  // 拥塞事件（丢包或 RTO）。同一恢复期内的重复事件由 InRecovery 过滤。
+  // 拥塞事件（判丢）。同一恢复期内的重复事件由 InRecovery 过滤。
   void OnCongestion(Time now);
+  // 持续拥塞（RFC 9002 §7.6.2）：窗口回到最小值并重新慢启动。
+  // ssthresh 保留上一次 OnCongestion 的结果，慢启动涨到那里就转拥塞避免。
+  void OnPersistentCongestion(Time now);
 
   // 该包是否在"上一次降窗之前"发出——是的话它的丢失不构成新的拥塞事件。
   // 这是 RFC 9002 的恢复期判定，能消除同一窗口内被重复砍两刀的问题。

@@ -248,7 +248,8 @@ int main(int argc, char** argv) {
   std::printf(" 流控          MAX_DATA 上限 %.1f KB · 已发 %.1f KB · 阻塞 %llu 次\n",
               double(a.FlowLimit()) / 1024.0, double(a.SentHighWater()) / 1024.0,
               (unsigned long long)sa.flow_blocked);
-  std::printf(" SRTT          %.2f ms   (RTO %.1f ms)\n", sa.srtt_ms, sa.rto_ms);
+  std::printf(" SRTT          %.2f ms   (PTO %.1f ms · 超时 %llu 次)\n", sa.srtt_ms, sa.pto_ms,
+              (unsigned long long)sa.pto_fires);
   std::printf(" 仿真耗时      %.0f ms  (相对虚拟时间加速 %.0f×)\n", wall_ms,
               wall_ms > 0 ? double(now) / 1000.0 / wall_ms : 0.0);
   std::printf(" 校验          %s  %zu 字节\n", ok ? "[OK] 逐字节一致" : "[FAIL] 数据不一致",

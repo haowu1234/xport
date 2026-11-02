@@ -2,7 +2,7 @@
 // 传输层：可靠、有序、多流复用的连接。
 //
 // 本期实现范围：
-//   * 包级可靠传输：SACK 区间 ACK + 包阈值/时间阈值丢包检测 + RTO
+//   * 包级可靠传输：SACK 区间 ACK + 包阈值/时间阈值丢包检测 + PTO（RFC 9002）
 //   * 恢复期（recovery period）：同一窗口内只降一次窗，避免被重复砍
 //   * 拥塞控制：CUBIC + HyStart++（见 cc.h），可切 Reno 做对照
 //   * pacing：令牌桶按 cwnd/SRTT 放行，杜绝"一次 Tick 倒空整个窗口"
@@ -38,7 +38,12 @@ struct TransportConfig {
   // 0 表示跟随 initial_max_data（默认行为）；想提高吞吐就显式调大。
   u64 recv_window_bytes = 0;
   u64 drr_quantum = 4 * 1368;   // DRR 每轮每流额度（字节）
-  Time min_rto_us = 200'000;    // RTO 下限：低于 200ms 会把排队抖动误判成丢包
+  // 定时器粒度（RFC 9002 kGranularity）。PTO = SRTT + max(4·RTTVAR, 粒度) + ack_delay。
+  // 不再有 200 ms 下限：PTO 超时只发探测包、不降窗，误触发的代价是两个多余的包，
+  // 而不是一次 200 ms 的停顿（回环 RTT 45 µs 时那相当于 4400 个 RTT）。
+  Time timer_granularity_us = 1000;
+  // 持续拥塞判定倍数（RFC 9002 kPersistentCongestionThreshold）
+  u32 persistent_congestion_threshold = 3;
   bool coalesce = true;         // 帧聚合开关（A/B 对照用）
   // 接收端接受的最大流数（sid ∈ [0, max_streams)）。sid 来自线上，不设上限时
   // 对端一个 sid 很大的包就能让本端 resize 出 GB 级的流表。越界帧丢弃并计 stream_limit。
@@ -57,7 +62,7 @@ class Transport {
   u32 OpenStream();
   void Write(u32 sid, Bytes data);
 
-  // 推进协议：RTO、流控探测、发 ACK、发新数据
+  // 推进协议：PTO、流控探测、发 ACK、发新数据
   void Tick(Time now);
   // 收到一个完整 UDP 包
   void OnPacket(Bytes pkt, Time now);
@@ -120,6 +125,7 @@ class Transport {
     u32 bytes = 0;   // 包内数据总字节（不含帧头）
     u8 seg_count = 0;
     bool used = false;
+    bool acked = false;  // 因被确认而释放（区别于判丢释放），持续拥塞判定要用
     Seg segs[kMaxSegsPerPacket];
   };
   struct OutStream {
@@ -154,6 +160,7 @@ class Transport {
   void InitBuffers();
 
   void SendData(Time now);
+  bool HasUnsentData() const;  // 流控允许范围内还有没发过的新数据
   void SendAck(Time now);
   void SendProbe(Time now);
   void RefillPacer(Time now);
@@ -171,7 +178,12 @@ class Transport {
   void MarkRecv(std::size_t idx) { recv_bits_[idx >> 6] |= 1ull << (idx & 63); }
   void DetectLoss(Time now);
   void UpdateRtt(Time sample_us);
-  Time Rto() const;
+  // 基础 PTO（不含退避）。持续拥塞时长也按它算。
+  Time Pto() const;
+  // 当前生效的 PTO：基础值 × 2^pto_count，上限 60 s
+  Time PtoBackoff() const;
+  // PTO 超时：登记要重发的数据，并给 SendData 两个不受 cwnd / pacing 约束的探测包额度
+  void OnPtoTimeout();
 
   // 仿真路径独占的适配器；真实路径下为 nullptr。
   // 声明顺序必须在 io_ 之前——引用绑定的对象要先构造出来。
@@ -220,6 +232,12 @@ class Transport {
   u64 flow_max_ = 0;
   bool flow_blocked_ = false;
   Time flow_blocked_since_ = 0;
+
+  // PTO 状态（RFC 9002 §6.2）
+  Time last_send_t_ = 0;    // 最近一次发出数据包的时刻，PTO 从这里起算
+  u32 pto_count_ = 0;       // 连续 PTO 次数，决定退避倍数；有新确认就清零
+  u32 probe_budget_ = 0;    // 剩余可绕过 cwnd / pacing 的探测包个数
+  Time first_rtt_t_ = 0;    // 拿到首个 RTT 样本的时刻：之前发的包不参与持续拥塞判定
 
   // pacing 令牌桶：没有它，一次 Tick 会把整个 cwnd 倒进队列，尾部成批丢弃
   double tokens_ = 0;

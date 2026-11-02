@@ -195,4 +195,11 @@ void CubicCc::OnCongestion(Time now) {
   phase_ = CcPhase::kCongAvoid;
 }
 
+void CubicCc::OnPersistentCongestion(Time now) {
+  cwnd_ = double(cfg_.min_cwnd);
+  phase_ = CcPhase::kSlowStart;
+  has_congestion_ = true;
+  recovery_start_ = now;  // 之前发出的包再丢也不算新事件
+}
+
 }  // namespace xport

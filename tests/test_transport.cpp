@@ -361,3 +361,123 @@ TEST(AppLimitedSenderKeepsCwndBounded) {
   CHECK(r.a.Cwnd() <= 2 * initial);    // 窗口没有被未经验证的 ACK 撑大
   CHECK_EQ(r.Got(sid).size(), 1900u * 1400u);  // 数据照常送达
 }
+
+// ---- PTO（RFC 9002 §6.2）----
+
+namespace {
+// 连续驱动两端，每个 tick 回调一次 probe(now)；probe 返回 true 时停止
+Time Drive(Rig& r, Time limit, const std::function<bool(Time)>& probe) {
+  std::vector<u8> pkt;
+  for (Time now = 0; now < limit; now += 100) {
+    r.a.Tick(now);
+    r.b.Tick(now);
+    while (r.link.Poll(1, &pkt, now)) r.a.OnPacket(Bytes(pkt), now);
+    while (r.link.Poll(2, &pkt, now)) r.b.OnPacket(Bytes(pkt), now);
+    r.Drain();
+    if (probe(now)) return now;
+  }
+  return 0;
+}
+}  // namespace
+
+TEST(PtoRecoversTailLossFasterThanOldRto) {
+  // 尾部丢包：最后一批数据包丢了，后面没有新包能触发包阈值，只能靠定时器。
+  // 旧实现要等 200 ms 下限的 RTO；PTO ≈ SRTT + 4·RTTVAR + ack_delay，RTT 2 ms 时约 5 ms。
+  LinkParams p;
+  p.bandwidth_mbps = 100;
+  p.delay_us = 1000;
+  const auto data = MakeData(256 * 1024, 5);
+
+  // 第一遍（无丢包）：记下最后一个新字节发出的时刻
+  Time last_new = 0;
+  {
+    Rig r(p);
+    const u32 sid = r.a.OpenStream();
+    r.a.Write(sid, Bytes(data));
+    Drive(r, 2'000'000, [&](Time now) {
+      if (r.a.stats().bytes_sent >= data.size()) {
+        last_new = now;
+        return true;
+      }
+      return false;
+    });
+  }
+  CHECK(last_new > 2000);
+
+  // 第二遍：同一种子、同一时序，从最后一个新字节发出前 1 ms 起丢 6 ms。
+  // 窗口要盖住时间阈值判丢后的那轮重传，否则时间阈值就能自己补回来，测不到 PTO。
+  // 丢包窗口结束后路径恢复，PTO 探测包是唯一能触发新 ACK 的东西。
+  LinkParams q = p;
+  q.loss_from_us = last_new - 1000;
+  q.loss_to_us = last_new + 5000;
+  Rig r(q);
+  const u32 sid = r.a.OpenStream();
+  r.a.Write(sid, Bytes(data));
+  const Time done = Drive(r, 2'000'000, [&](Time) {
+    return r.a.SendComplete() && r.Got(sid).size() == data.size();
+  });
+  CHECK(done > 0);
+  CHECK(r.Got(sid) == data);
+  CHECK(r.link.dropped() > 0);       // 确实制造了尾部丢包
+  CHECK(r.a.stats().pto_fires >= 1);  // 并且是 PTO 补回来的
+  CHECK(done - last_new < 50'000);   // 远小于旧的 200 ms RTO 下限
+}
+
+TEST(PtoBacksOffExponentiallyOnBlackhole) {
+  // 路径完全不通：PTO 必须指数退避，不能按固定周期持续重发
+  LinkParams p;
+  p.bandwidth_mbps = 100;   // 4 MB 需要约 340 ms，黑洞开始时一定还在传
+  p.delay_us = 1000;
+  p.loss_from_us = 50'000;  // 50 ms 后两个方向都进入黑洞，持续 2 s
+  p.loss_to_us = 2'050'000;
+  Rig r(p);
+  const auto data = MakeData(4 << 20, 6);
+  const u32 sid = r.a.OpenStream();
+  r.a.Write(sid, Bytes(data));
+
+  u64 ptos_in_hole = 0;
+  double pto_ms_at_end = 0;
+  bool checked = false;
+  const Time done = Drive(r, 30'000'000, [&](Time now) {
+    if (!checked && now >= 2'049'900) {
+      ptos_in_hole = r.a.stats().pto_fires;
+      pto_ms_at_end = r.a.stats().pto_ms;
+      checked = true;
+    }
+    return r.a.SendComplete();
+  });
+  // 2 s 黑洞、基础 PTO 约 5 ms：不退避会触发约 400 次，退避后约 log2(2000/5) ≈ 9 次
+  CHECK(ptos_in_hole >= 5);
+  CHECK(ptos_in_hole <= 12);
+  CHECK(pto_ms_at_end > 200.0);
+  // 路径恢复后能继续传完，并且退避已清零
+  CHECK(done > 0);
+  CHECK(r.Got(sid) == data);
+  CHECK(r.a.stats().pto_ms < 50.0);
+}
+
+TEST(PersistentCongestionCollapsesCwnd) {
+  // 黑洞横跨多个 PTO：判丢时应识别为持续拥塞，窗口回到最小值，而不是只降一次 β
+  LinkParams p;
+  p.bandwidth_mbps = 100;
+  p.delay_us = 1000;
+  p.loss_from_us = 100'000;
+  p.loss_to_us = 400'000;
+  Rig r(p);
+  const auto data = MakeData(8 << 20, 7);
+  const u32 sid = r.a.OpenStream();
+  r.a.Write(sid, Bytes(data));
+
+  u64 cwnd_before = 0;
+  u64 cwnd_min_after = ~0ull;
+  const Time done = Drive(r, 30'000'000, [&](Time now) {
+    if (now < 100'000) cwnd_before = r.a.Cwnd();
+    if (now > 400'000 && now < 500'000) cwnd_min_after = std::min<u64>(cwnd_min_after, r.a.Cwnd());
+    return r.a.SendComplete();
+  });
+  CHECK(cwnd_before > 20 * 1368);  // 先涨起来，后面的回落才有意义
+  CHECK(r.a.stats().persistent_congestion >= 1);
+  CHECK(cwnd_min_after <= 4 * 1368);  // 回到最小窗口附近，而不是 0.7 × cwnd_before
+  CHECK(done > 0);
+  CHECK(r.Got(sid) == data);
+}

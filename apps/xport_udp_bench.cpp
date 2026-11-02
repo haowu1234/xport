@@ -390,7 +390,7 @@ Result RunXport(const RunOpts& o) {
   r.acks = rs.ack_sent;
   r.retr = st.retransmits;
   r.lost = st.lost;
-  r.rto = st.rto_fires;
+  r.rto = st.pto_fires;
   r.sfail = st.send_fail;
   r.rxdrop = rs.rx_overflow;
   r.pps = wall > 0 ? double(st.pkts_sent) * 1e6 / double(wall) : 0.0;
