@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, name: linux-gcc, cc: gcc, cxx: g++ }
+          - { os: ubuntu-latest, name: linux-clang, cc: clang, cxx: clang++ }
+          - { os: macos-latest, name: macos-clang, cc: clang, cxx: clang++ }
+          - { os: windows-latest, name: windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # 回环基准不进 CI：runner 的 CPU 份额不稳定，跑出来的吞吐没有参考价值。
+      # CI 只回答"能不能编过、功能对不对"，性能数字一律在固定机器上手测。
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Example
+        run: ctest --test-dir build --build-config Release --output-on-failure -R hello_xport
+        continue-on-error: true
+
+  sanitizers:
+    name: asan-ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure with sanitizers
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

@@ -36,6 +36,8 @@ $CXX $FLAGS $SRC tests/test_main.cpp tests/test_wire.cpp tests/test_cc.cpp tests
 # shellcheck disable=SC2086
 $CXX $FLAGS $SRC apps/xport_demo.cpp -o build/xport_demo $EXTRA
 # shellcheck disable=SC2086
+$CXX $FLAGS $SRC examples/hello_xport.cpp -o build/hello_xport $EXTRA
+# shellcheck disable=SC2086
 $CXX $FLAGS $SRC apps/xport_bench.cpp -o build/xport_bench $EXTRA
 # shellcheck disable=SC2086
 $CXX $FLAGS $SRC apps/xport_ccprobe.cpp -o build/xport_ccprobe $EXTRA
