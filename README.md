@@ -5,7 +5,7 @@
 [![CI](https://github.com/haowu1234/xport/actions/workflows/ci.yml/badge.svg)](https://github.com/haowu1234/xport/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
-![tests](https://img.shields.io/badge/tests-43%20passing-3fb950)
+![tests](https://img.shields.io/badge/tests-48%20passing-3fb950)
 ![dependencies](https://img.shields.io/badge/dependencies-none-3fb950)
 
 xport 在 UDP 之上实现了一套可靠、有序、支持多流复用的传输协议：协议语义对齐 QUIC / RFC，
@@ -60,7 +60,7 @@ git clone https://github.com/haowu1234/xport.git && cd xport
 # B. CMake
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/tests/xport_tests        # 43 个用例
+./build/tests/xport_tests        # 48 个用例
 ./build/apps/xport_demo --mb 16 --streams 4 --loss 2
 ```
 
@@ -161,8 +161,9 @@ for (xport::Time now = 0; !sender.SendComplete(); now += 100) {
 
 | 场景 | 吞吐 | 备注 |
 |---|---:|---|
-| 单流 64 MiB | **3477 Mbps** | 天花板的 64%，2.23 syscall/包，SRTT 43 µs |
-| 8 条并发流 16 MiB | 3441 Mbps | 报文更碎，调度开销略升 |
+| 单流 64 MiB | **4358 Mbps** | 天花板的 81%，0.45 syscall/包（批量收发）|
+| 单流 64 MiB · 关批量 | 3462 Mbps | 2.22 syscall/包，用 `use_batch=false` 做 A/B |
+| 8 条并发流 16 MiB | 4044 Mbps | 关批量 3094 Mbps |
 | 1% 丢包 | 1386 Mbps | 0 次 PTO 超时 |
 | 2% 丢包 | 1013 Mbps | 修复前 405 Mbps（87–1032，双峰） |
 | 5% 丢包 | 541 Mbps | 修复前 5.6 Mbps |
@@ -296,7 +297,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | 真实 socket 后端 | ✅ | `IoEndpoint` + Winsock / BSD socket，非阻塞轮询；CI 覆盖 Linux / macOS / Windows |
 | 握手 / CID 协商 / cookie | ❌ | 当前两端静态配对，窗口由配置约定 |
 | 加密 | ❌ | v1 明文 |
-| 批量收发 | ❌ | 每包一次 `send`/`recv`，真实链路上的第一瓶颈 |
+| 批量收发 | ✅ | Linux `sendmmsg` / macOS `sendmsg_x`（私有 syscall，运行时探测 + 回退）；Windows 待做。单流 +26%，syscall/包 2.22 → 0.45 |
 | GSO / GRO | ❌ | 帧聚合已在协议层就绪，缺内核 offload 那部分收益 |
 
 ---
@@ -385,7 +386,8 @@ python scripts/plot_readme.py
 | # | 事项 | 为什么现在是它 |
 |---|---|---|
 | ✅ | ~~PTO（探测超时）~~ | 已完成：5% 丢包回环吞吐 5.6 → 541 Mbps，见「真实 socket · 本机回环」② |
-| 1 | **批量收发** | Windows `WSASendMsg` + IOCP 预投，Linux `sendmmsg`/`recvmmsg`。批量 32 能把 10 µs/包 摊掉一个数量级，是突破 1 Gbps 单流的唯一杠杆 |
+| ✅ | ~~批量收发（Linux / macOS）~~ | 已完成：单流 3462 → 4358 Mbps，syscall/包 2.22 → 0.45 |
+| 1 | **批量收发（Windows）** | `WSASendMsg` + IOCP 预投。语义和同步批量不同（一次调用取回 N 个完成），要单独实现；抽象层已留好接口 |
 | 2 | **真实网卡 bench** | 回环测的是 syscall 成本，真实网卡还要加中断、DMA、GRO。到那一步才有"单流 6–7 Gbps"的结论 |
 | 3 | **`tc netem` 故障注入 + 24h 长稳 + 与 msquic 对比** | 拿到可信的工程结论，而不是"跑得快" |
 

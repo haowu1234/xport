@@ -17,6 +17,7 @@ else()
 endif()
 
 add_library(xport STATIC
+  src/batch_io.cpp
   src/crc32c.cpp
   src/cc.cpp
   src/packet.cpp

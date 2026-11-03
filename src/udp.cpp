@@ -1,5 +1,7 @@
 #include "xport/udp.h"
 
+#include "xport/batch_io.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -80,6 +82,15 @@ std::unique_ptr<UdpSocket> UdpSocket::Open(const UdpConfig& cfg, std::string* er
   // 比 MTU 略大：真实链路上偶尔会有对方发的超大包（比如误配 jumbo），
   // 缓冲太小会被截断成"看似合法的短包"，那是最难查的一类问题。
   self->rxbuf_.resize(kMtu * 4);
+  self->want_batch_ = cfg.use_batch;
+  // 批量缓冲一次性分配好：热路径上只做 memcpy，不碰 malloc
+  if (self->want_batch_ && batch::Probe().send) {
+    self->txpool_.resize(kMtu * self->batch_);
+    self->txlen_.resize(self->batch_, 0);
+  }
+  if (self->want_batch_ && batch::Probe().recv) {
+    self->rxpool_.resize(kMtu * self->batch_);
+  }
 
   sockaddr_in local{};
   local.sin_family = AF_INET;
@@ -196,6 +207,67 @@ bool UdpSocket::Connect(const std::string& addr, u16 port, std::string* err) {
   return true;
 }
 
+bool UdpSocket::batch_enabled() const {
+  return want_batch_ && batch::Probe().send && !txpool_.empty();
+}
+
+const char* UdpSocket::batch_backend() const {
+  return (want_batch_ && batch::Probe().send) ? batch::Probe().backend : "single";
+}
+
+bool UdpSocket::SendQueued(Bytes pkt, Time now) {
+  if (!batch_enabled() || pkt.size() > kMtu) return Send(pkt, now);
+
+  std::memcpy(txpool_.data() + qcount_ * kMtu, pkt.data(), pkt.size());
+  txlen_[qcount_] = pkt.size();
+  ++qcount_;
+  // 攒满就发。不等下一次 Flush，省掉调用方记状态的负担。
+  if (qcount_ >= batch_) return Flush(now);
+  return true;
+}
+
+bool UdpSocket::Flush(Time now) {
+  if (qcount_ == 0) return true;
+  if (!batch_enabled()) {  // 理论上进不来（SendQueued 已经分流），兜底防状态不一致
+    qcount_ = 0;
+    return true;
+  }
+
+  batch::Slot slots[64];
+  const unsigned n = unsigned(qcount_ < 64 ? qcount_ : 64);
+  for (unsigned i = 0; i < n; ++i) {
+    slots[i].data = txpool_.data() + i * kMtu;
+    slots[i].len = txlen_[i];
+    slots[i].capacity = kMtu;
+  }
+
+  ++send_syscalls_;
+  const int done = batch::Send(fd_, slots, n);
+  if (done < 0) {
+    // 批量失败就逐包补发：发送失败是正常的丢包源，但不能整批静默丢掉
+    ++send_fail_;
+    std::snprintf(err_, sizeof err_, "批量发送失败，已回退逐包");
+    bool all = true;
+    for (unsigned i = 0; i < n; ++i) {
+      if (!Send(Bytes(txpool_.data() + i * kMtu, txlen_[i]), now)) all = false;
+    }
+    qcount_ = 0;
+    return all;
+  }
+
+  sent_ += u64(done);
+  // 内核只收了前 done 个：把剩下的往前挪，下次再发。
+  // 不挪的话这些报文会被下一批覆盖，表现为随机丢包，极难查。
+  const unsigned left = n - unsigned(done);
+  if (left > 0) {
+    std::memmove(txpool_.data(), txpool_.data() + unsigned(done) * kMtu, left * kMtu);
+    for (unsigned i = 0; i < left; ++i) txlen_[i] = txlen_[unsigned(done) + i];
+    send_fail_ += left;  // 没发出去的等价于本地丢弃，交给上层的丢包恢复
+  }
+  qcount_ = left;
+  return done > 0;
+}
+
 bool UdpSocket::Send(Bytes pkt, Time /*now*/) {
   ++send_syscalls_;
 #ifdef _WIN32
@@ -220,6 +292,37 @@ bool UdpSocket::Send(Bytes pkt, Time /*now*/) {
 std::size_t UdpSocket::Recv(Batch* out, Time now) {
   std::size_t n = 0;
   ++poll_calls_;
+
+  // 批量路径：一次 syscall 取回最多 batch_ 个报文。
+  // 失败（含平台不支持）直接落到下面的逐包循环，不返回错误。
+  if (want_batch_ && batch::Probe().recv && !rxpool_.empty()) {
+    batch::Slot slots[64];
+    const unsigned want = unsigned(batch_ < 64 ? batch_ : 64);
+    for (unsigned i = 0; i < want; ++i) {
+      slots[i].data = rxpool_.data() + i * kMtu;
+      slots[i].len = 0;
+      slots[i].capacity = kMtu;
+    }
+    ++recv_syscalls_;
+    const int got = batch::Recv(fd_, slots, want);
+    if (got > 0) {
+      for (int i = 0; i < got; ++i) {
+        if (slots[i].len == 0) continue;  // 0 长度报文对协议无意义
+        if (out->size() < n + 1) out->emplace_back();
+        (*out)[n].data.assign(slots[i].data, slots[i].data + slots[i].len);
+        (*out)[n].at = now;
+        ++n;
+        ++recv_;
+      }
+      return n;  // 批量成功就不再走逐包，避免同一轮里混用两条路径
+    }
+    if (got == 0) {  // 非阻塞下的"暂无数据"，和逐包路径的 EWOULDBLOCK 等价
+      ++empty_polls_;
+      return 0;
+    }
+    // got < 0：批量出错，继续往下走逐包兜底
+  }
+
   while (n < batch_) {
     int r = 0;
     ++recv_syscalls_;

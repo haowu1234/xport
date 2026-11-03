@@ -25,6 +25,9 @@ struct UdpConfig {
   int rcvbuf_bytes = 4 << 20;
   int sndbuf_bytes = 4 << 20;
   std::size_t batch = 32;  // 一次 Recv 最多取多少个报文
+  // 批量收发（Linux sendmmsg / macOS sendmsg_x）。平台不支持或运行时探测失败会自动
+  // 回退到逐包路径，所以打开它是安全的。设 false 可做 A/B 对照。
+  bool use_batch = true;
 };
 
 class UdpSocket final : public IoEndpoint {
@@ -40,6 +43,19 @@ class UdpSocket final : public IoEndpoint {
   bool Send(Bytes pkt, Time now) override;
   bool Send(Bytes pkt) { return Send(pkt, MonotonicUs()); }  // 便利重载
   std::size_t Recv(Batch* out, Time now) override;
+
+  // 把报文排进发送队列，攒满一批再发。队列满时自动 Flush。
+  // 批量不可用时退化为直接 Send，语义与 Send 完全一致。
+  bool SendQueued(Bytes pkt, Time now) override;
+  // 把队列里剩下的报文发出去。Tick 末尾或一轮发送结束时必须调用，
+  // 否则尾部报文会一直压在队列里——这是批量化最容易踩的坑。
+  bool Flush(Time now);
+  bool FlushSend(Time now) override { return Flush(now); }
+  std::size_t queued() const { return qcount_; }
+
+  // 实际生效的批量后端名（"sendmsg_x" / "recvmmsg" / "single"），用于如实报告
+  const char* batch_backend() const;
+  bool batch_enabled() const;
   Time Now() override { return MonotonicUs(); }
   bool ok() const override { return fd_ >= 0; }
   const char* last_error() const override { return err_; }
@@ -57,7 +73,14 @@ class UdpSocket final : public IoEndpoint {
   int actual_rcvbuf_ = 0;
   int actual_sndbuf_ = 0;
   std::size_t batch_ = 32;
+  bool want_batch_ = true;
   std::vector<u8> rxbuf_;  // 复用的单包接收缓冲
+
+  // 批量收发用的常驻缓冲：一次性按 batch × MTU 分配，收发热路径零 malloc。
+  std::vector<u8> txpool_;   // 发送队列的报文内容，按 kMtu 跨步切片
+  std::vector<u8> rxpool_;   // 接收批量的落地缓冲，同样按 kMtu 切片
+  std::vector<std::size_t> txlen_;  // 队列中各报文的长度
+  std::size_t qcount_ = 0;          // 当前排队的报文数
   char err_[128] = {};
 };
 
