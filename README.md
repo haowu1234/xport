@@ -2,25 +2,33 @@
 
 **基于 UDP 的 C++20 可靠传输框架** — 可靠 · 有序 · 多流复用 · 零第三方依赖
 
+[![CI](https://github.com/haowu1234/xport/actions/workflows/ci.yml/badge.svg)](https://github.com/haowu1234/xport/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![tests](https://img.shields.io/badge/tests-43%20passing-3fb950)
 ![dependencies](https://img.shields.io/badge/dependencies-none-3fb950)
-![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-6e7781)
-![status](https://img.shields.io/badge/status-M3%20runnable-blue)
 
-协议语义对齐 QUIC / RFC，线格式完全自研（不与标准 QUIC 互通）。
-同一个 `IoEndpoint` 抽象下有两套后端：**确定性链路仿真器**与**真实 UDP socket**，上层代码零改动。
+xport 在 UDP 之上实现了一套可靠、有序、支持多流复用的传输协议：协议语义对齐 QUIC / RFC，
+线格式完全自研（**不与标准 QUIC 互通**）。同一个 `IoEndpoint` 抽象下有两套后端
+——**确定性链路仿真器**与**真实 UDP socket**，上层代码零改动。
+
+它适合：读懂一个现代传输协议是怎么落地的、在可复现的仿真里验证拥塞控制、
+拿来做协议实验的底座。它**不适合**直接用于生产：目前没有握手、没有加密（见[能力矩阵](#能力矩阵)）。
+
+- [关键结果](#关键结果) · [架构](#架构) · [快速开始](#快速开始) · [用法](#用法)
+- [实测数据](#实测数据) · [能力矩阵](#能力矩阵) · [文档](#文档) · [路线图](#路线图)
 
 ---
 
 ## 关键结果
 
-| 单流回环吞吐 | 降窗比例 | 理论曲线偏差 | 热路径堆分配 |
-|---:|---:|---:|---:|
-| **~900 Mbps** | **0.700** | **0.7%** | **0 次/包** |
+| 单流回环吞吐 | 占裸 UDP 天花板 | 协议单包成本 | 热路径堆分配 | 降窗比例偏差 |
+|---:|---:|---:|---:|---:|
+| **3.5 Gbps** | **64%** | **113 ns** | **0 次/包** | **0.7%** |
 
-裸 UDP 天花板约 1.2 Gbps · 13 次拥塞事件的降窗比例全部为 0.700（理论 β = 0.7）·
-理论曲线由 Python 按 RFC 独立回算 · 原实现为 2 次/包、34 次/ACK
+<sub>Apple M5 · macOS · Apple clang 21 · `-O2` · 单线程忙轮询（收发共用一核）·
+裸 UDP 天花板 5.4 Gbps · 13 次拥塞事件的降窗比例全部为 0.700（理论 β = 0.7）·
+理论曲线由 Python 按 RFC 独立回算。较慢机器上的绝对值见[实测数据](#实测数据)。</sub>
 
 ---
 
@@ -86,21 +94,89 @@ cmake --build build --config Release
 
 ---
 
+## 用法
+
+完整可编译版本见 [`examples/hello_xport.cpp`](examples/hello_xport.cpp)
+（`./build/hello_xport`，CMake 和 quickbuild 都会编它）。核心只有四步：
+
+```cpp
+#include "xport/sim.h"
+#include "xport/transport.h"
+
+// 1) 一条确定性仿真链路：100 Mbps、单程 5 ms、1% 丢包、固定种子
+xport::LinkParams cfg;
+cfg.bandwidth_mbps = 100;
+cfg.delay_us = 5000;
+cfg.loss_pct = 1.0;
+cfg.seed = 42;                       // 同种子 → 逐位可复现
+xport::SimLink link(cfg);
+
+// 2) 两个端点互为对端
+xport::Transport sender(link, /*self=*/1, /*peer=*/2);
+xport::Transport receiver(link, /*self=*/2, /*peer=*/1);
+
+// 3) 开流、提交数据（Write 只入队，不直接发包）
+const xport::u32 sid = sender.OpenStream();
+sender.Write(sid, xport::Bytes(payload));
+
+// 4) 驱动循环：时间由调用方注入，协议自己不读时钟
+for (xport::Time now = 0; !sender.SendComplete(); now += 100) {
+  sender.Tick(now);
+  receiver.Tick(now);
+  while (link.Poll(1, &pkt, now)) sender.OnPacket(xport::Bytes(pkt), now);
+  while (link.Poll(2, &pkt, now)) receiver.OnPacket(xport::Bytes(pkt), now);
+
+  // 消费式接收：Peek 零拷贝读、Consume 归还窗口
+  for (;;) {
+    const xport::Bytes view = receiver.Peek(sid);
+    if (view.empty()) break;
+    sink.insert(sink.end(), view.begin(), view.end());
+    receiver.Consume(sid, view.size());
+  }
+}
+```
+
+**换成真实 UDP socket**：把 `Transport` 的第一个参数从 `SimLink` 换成 `UdpSocket`
+（`Transport(IoEndpoint&, ...)` 那个构造函数），收包改用 `UdpSocket::Recv(Batch*, now)`，
+其余逻辑一行不改。
+
+两个容易踩的点，都是有意设计：
+
+- **必须 `Consume`**。不消费则流控窗口不前进，对端被背压挡住，传输会停在中途。
+- **`Tick(now)` 的 `now` 必须单调递增**，且由调用方提供。仿真用虚拟时间，真实路径用
+  `MonotonicUs()`；端点自己缓存时间会让仿真失去确定性。
+
+---
+
 ## 实测数据
 
 ### 真实 socket · 本机回环
 
-单流、单线程忙轮询、`127.0.0.1`，数据逐流校验通过。
+回环基准回答两件事：**协议在单核上能跑多快**、**丢包恢复行为对不对**。它回答不了拥塞控制
+（回环没有队列、没有带宽限制），那部分只能靠确定性仿真。
+
+下面两组数字来自**两台不同的机器**，绝对值不可横比，各自内部可比。
+
+<b>机器 A · Apple M5 / macOS / clang 21</b>（裸 UDP 天花板 5.4 Gbps，回环 RTT 6 µs）
 
 | 场景 | 吞吐 | 备注 |
 |---|---:|---|
-| 单流 8 MiB | **923.9 Mbps** | 67.1 Mbit / 72.6 ms |
-| 单流 64 MiB | 903.3 Mbps | 长样本，更可信 |
+| 单流 64 MiB | **3477 Mbps** | 天花板的 64%，2.23 syscall/包，SRTT 43 µs |
+| 8 条并发流 16 MiB | 3441 Mbps | 报文更碎，调度开销略升 |
+| 1% 丢包 | 1386 Mbps | 0 次 PTO 超时 |
+| 2% 丢包 | 1013 Mbps | 修复前 405 Mbps（87–1032，双峰） |
+| 5% 丢包 | 541 Mbps | 修复前 5.6 Mbps |
+| 10% 丢包 | 279 Mbps | 修复前 1.8 Mbps |
+
+<b>机器 B · 较慢的 x86 机器</b>（裸 UDP 天花板约 1.2 Gbps，回环 RTT 9 µs）——
+早期数据，PTO 之前测的，保留用于对照 syscall 分析：
+
+| 场景 | 吞吐 | 备注 |
+|---|---:|---|
+| 单流 64 MiB | 903.3 Mbps | 长样本 |
 | 单流 256 MiB | 881.4 Mbps | 持续满载 2.4 s，略有降频 |
-| 8 条并发流 16 MiB | 864.6 Mbps | 报文更碎，调度开销上升 |
 | 小消息 1600 × 200 B | **400 个包** | 帧聚合开启；关闭时需 1600 个包 |
-| 1% 真实丢包 | 463.7 Mbps | 重传 32 包即恢复 |
-| 2% 真实丢包 | **49.8 Mbps** | 19 次 RTO 停顿 —— 缺 PTO，见下（**已修复**，见 ②） |
+| 2% 丢包 | 49.8 Mbps | 19 次 RTO 停顿 —— 当时缺 PTO，**已修复**（见 ②） |
 
 ![丢包率与吞吐](docs/figs/loss-cliff.svg)
 
@@ -160,7 +236,7 @@ $ ./build/xport_demo --mb 32 --loss 0
 
 | 指标 | 结果 | 说明 |
 |---|---|---|
-| 单包协议成本 | 收 **0.42 µs** / 发 **1.05 µs** | 单核上限：接收 27.5 Gbps、发送 56 Gbps（不含内核） |
+| 单包协议成本 | 收 **72 ns** / 发 **42 ns**（合计 113 ns） | 单核上限：接收约 160 Gbps、发送约 280 Gbps（不含内核） |
 | 稳态 ACK 成本 | **0.4–1.0 µs，与在途包数无关** | 优化前 16→4096 包涨 61 倍（0.8→49 µs） |
 | 热路径堆分配 | **0 次/包** | 区间表、包号位图、流表全换定长结构 |
 | 接收缓冲落地 | 0.49 → **0.03 ns/B** | 每流预分配环形缓冲，8 Gbps 单流仅占单核 29% |
@@ -203,7 +279,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | varint（1/2/4/8 B） | ✅ | 对齐 RFC 9000；超 62 位拒绝而非静默截断 |
 | 帧编解码 | ✅ | STREAM / ACK / MAX_DATA / PING，含截断与非法帧防御 |
 | 流数上限 | ✅ | `max_streams`（默认 256）；越界 sid 直接丢弃，防止对端一个包撑爆流表 |
-| 帧聚合 | ✅ | 一个报文最多 16 个 STREAM 帧（可跨流），小消息 pps 降 4 倍 |
+| 帧聚合 | ✅ | 一个报文最多 8 段（可跨流，`kMaxSegsPerPacket`），小消息 pps 降 4 倍 |
 | ACK | ✅ | **显式区间**（最多 16 段），不是位图窗口 |
 | 包级可靠传输 | ✅ | 滑动窗口 + 包阈值 3 + 时间阈值 1.125×RTT |
 | 恢复期去重 | ✅ | 降窗前发出的包再丢不算新事件，避免一次拥塞被反复砍 |
@@ -217,7 +293,7 @@ CUBIC 的可信度不来自"跑得快"，来自**曲线能被独立算出**。�
 | cwnd 验证 | ✅ | 应用受限 / 流控受限时不增窗并冻结 CUBIC 时间轴（RFC 9438 §4.8、RFC 7661） |
 | pacing | ✅ | 令牌桶，慢启动 2×、拥塞避免 1.25×，突发 8 包 |
 | 流控 | ✅ | MAX_DATA 连接级窗口 + 随 ACK 捎带 + 探测防死锁 |
-| 真实 socket 后端 | ✅ | `IoEndpoint` + Winsock / BSD，非阻塞轮询 |
+| 真实 socket 后端 | ✅ | `IoEndpoint` + Winsock / BSD socket，非阻塞轮询；CI 覆盖 Linux / macOS / Windows |
 | 握手 / CID 协商 / cookie | ❌ | 当前两端静态配对，窗口由配置约定 |
 | 加密 | ❌ | v1 明文 |
 | 批量收发 | ❌ | 每包一次 `send`/`recv`，真实链路上的第一瓶颈 |
@@ -268,8 +344,9 @@ apps/           xport_demo       演示
                 xport_cpubench   单包 CPU 成本
                 xport_udp_bench  真实 socket 回环基准
 docs/           四份报告（见上表）
-docs/figs/      README 内嵌图表（独立 SVG，由 scripts/plot_readme.py 生成）
-scripts/        quickbuild.sh · plot_cc.py · plot_udp.py · plot_readme.py
+docs/figs/      README 内嵌图表（独立 SVG，由 scripts/plot_*.py 生成）
+examples/       hello_xport.cpp  最小可运行示例
+scripts/        quickbuild.sh · plot_cc.py · plot_udp.py · plot_readme.py · plot_arch.py
 ```
 
 </details>
@@ -314,6 +391,24 @@ python scripts/plot_readme.py
 
 ---
 
-<div align="center">
-<sub>协议语义对齐 QUIC / RFC 9000 · 9002 · 9438 · 9406，实现与线格式独立</sub>
-</div>
+## 参与贡献
+
+欢迎 issue 和 PR。有一条硬性要求：**性能结论要能复现，正确性结论要有失败用例支撑**
+（新用例在修改前的代码上必须失败，否则它守不住任何东西）。
+详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 参考规范
+
+协议语义对齐下列 RFC，实现与线格式独立：
+
+| RFC | 用到的部分 |
+|---|---|
+| [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) | 帧类型语义、varint 编码、流控与多流模型 |
+| [RFC 9002](https://www.rfc-editor.org/rfc/rfc9002) | 丢包检测（包阈值 / 时间阈值）、PTO、持续拥塞 |
+| [RFC 9438](https://www.rfc-editor.org/rfc/rfc9438) | CUBIC：三次曲线、快速收敛、Reno 友好区 |
+| [RFC 9406](https://www.rfc-editor.org/rfc/rfc9406) | HyStart++ 慢启动退出 |
+| [RFC 7661](https://www.rfc-editor.org/rfc/rfc7661) | 应用受限时的 cwnd 验证 |
+
+## 许可证
+
+[MIT](LICENSE) © 2026 haowu1234

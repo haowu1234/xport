@@ -17,8 +17,6 @@ constexpr std::size_t kFrameOverhead = 24;
 Transport::Transport(SimLink& link, u32 self, u32 peer, const TransportConfig& cfg)
     : owned_io_(std::make_unique<SimEndpoint>(link, self, peer)),
       io_(*owned_io_),
-      self_(self),
-      peer_(peer),
       cfg_(cfg),
       cc_(cfg.cc),
       flow_max_(cfg.initial_max_data) {
