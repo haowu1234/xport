@@ -32,6 +32,7 @@ if(WIN32)
 endif()
 
 add_subdirectory(apps)
+add_subdirectory(examples)
 
 enable_testing()
 add_subdirectory(tests)

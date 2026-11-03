@@ -189,8 +189,7 @@ class Transport {
   // 声明顺序必须在 io_ 之前——引用绑定的对象要先构造出来。
   std::unique_ptr<SimEndpoint> owned_io_;
   IoEndpoint& io_;
-  u32 self_ = 0;
-  u32 peer_ = 0;
+  // 节点号只用于构造 SimEndpoint（它自己保存一份），Transport 本身不需要留。
   TransportConfig cfg_;
 
   std::deque<OutStream> out_;  // sid 即下标；deque 保证扩容时引用不失效
