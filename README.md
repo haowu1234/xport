@@ -52,6 +52,21 @@ xport 在 UDP 之上实现了一套可靠、有序、支持多流复用的传输
 
 > 代价：单连接吞吐上限 = 单核。扩展方向是多连接多线程，而不是把单个连接拆成收发两个线程。
 
+### 一个数据包的一生
+
+从应用写入到对端交付，再到 ACK 回流闭环。每一站标注了实际生效的常量。
+
+![一个数据包的一生](docs/figs/packet-lifecycle.svg)
+
+### 关键结构解剖
+
+字节布局与指针语义都按源码绘制：报文头的字段宽度就是真实字节数，
+环形缓冲的三个指针对应 `InStream` 的 `consumed` / `contiguous` / `highest_end`。
+
+![关键结构解剖](docs/figs/anatomy.svg)
+
+<sub>两张图分别由 <code>scripts/plot_concept.py</code> 与 <code>scripts/plot_anatomy.py</code> 生成。</sub>
+
 ---
 
 ## 快速开始
@@ -355,7 +370,8 @@ apps/           xport_demo       演示
 docs/           四份报告（见上表）
 docs/figs/      README 内嵌图表（独立 SVG，由 scripts/plot_*.py 生成）
 examples/       hello_xport.cpp  最小可运行示例
-scripts/        quickbuild.sh · plot_cc.py · plot_udp.py · plot_readme.py · plot_arch.py
+scripts/        quickbuild.sh · plot_cc.py · plot_udp.py · plot_readme.py
+                plot_arch.py · plot_concept.py · plot_anatomy.py
 ```
 
 </details>
