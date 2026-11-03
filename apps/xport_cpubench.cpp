@@ -19,6 +19,31 @@
 #include "xport/sim.h"
 #include "xport/transport.h"
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+namespace {
+
+// 阻止编译器把被测代码当死代码删掉。
+// GCC/Clang 用空 asm + memory clobber（比 volatile 写便宜）；
+// MSVC 不支持 GCC 内联汇编语法，用 _ReadWriteBarrier + volatile 读代替。
+inline void KeepAlive(const void* p) {
+#if defined(__GNUC__) || defined(__clang__)
+  asm volatile("" : : "r"(p) : "memory");
+#elif defined(_MSC_VER)
+  volatile const unsigned char sink = *static_cast<const unsigned char*>(p);
+  (void)sink;
+  _ReadWriteBarrier();
+#else
+  // 兜底：原子屏障，所有编译器都认，代价略高但只在基线循环里用
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  (void)p;
+#endif
+}
+
+}  // namespace
+
 using namespace xport;
 using Clock = std::chrono::steady_clock;
 
@@ -203,9 +228,8 @@ int main(int argc, char** argv) {
   const double copy_ns = BestOf(5, kCopyIters, [&] {
     for (long long i = 0; i < kCopyIters; ++i) {
       std::memcpy(dst.data(), src.data() + (i & 7), kPayload - 8);
-      // 空 asm + memory clobber：告诉编译器"这块内存被外部读走了"，
-      // 阻止它把整段 memcpy 优化成死代码。比 volatile 写便宜得多。
-      asm volatile("" : : "r"(dst.data()) : "memory");
+      // 告诉编译器"这块内存被外部读走了"，阻止它把整段 memcpy 优化成死代码。
+      KeepAlive(dst.data());
     }
   });
 
@@ -221,7 +245,7 @@ int main(int argc, char** argv) {
     }
     const auto t1 = Clock::now();
     append_ns = std::min(append_ns, NsPerIter(t0, t1, kRxIters));
-    asm volatile("" : : "r"(v.data()) : "memory");
+    KeepAlive(v.data());
   }
 
   // ---- 6c. 载荷落地成本 vs 包长 ----
@@ -247,7 +271,7 @@ int main(int argc, char** argv) {
       }
       const auto t1 = Clock::now();
       grow = std::min(grow, NsPerIter(t0, t1, iters) / double(sz));
-      asm volatile("" : : "r"(v.data()) : "memory");
+      KeepAlive(v.data());
     }
 
     for (int r = 0; r < 3; ++r) {
@@ -258,7 +282,7 @@ int main(int argc, char** argv) {
         std::memcpy(ring.data() + off, big.data(), sz);
         off += sz;
         if (off + sz > ring.size()) off = 0;
-        asm volatile("" : : "r"(ring.data() + off) : "memory");
+        KeepAlive(ring.data() + off);
       }
       const auto t1 = Clock::now();
       reuse = std::min(reuse, NsPerIter(t0, t1, iters) / double(sz));
