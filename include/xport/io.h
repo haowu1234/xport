@@ -34,6 +34,13 @@ class IoEndpoint {
   // （这个错误的表现是所有包的时间戳都停在 0，超时定时器立刻成批触发）。
   virtual bool Send(Bytes pkt, Time now) = 0;
 
+  // 排队发送：允许后端把多个报文攒成一批、用一次 syscall 发出去。
+  // 默认实现直接转发给 Send——不支持批量的后端（仿真器、Windows）什么都不用改。
+  // 调用方发完一轮后**必须** FlushSend()，否则尾部报文会一直压在队列里。
+  virtual bool SendQueued(Bytes pkt, Time now) { return Send(pkt, now); }
+  // 把排队的报文发出去。没有队列的后端是空操作。
+  virtual bool FlushSend(Time /*now*/) { return true; }
+
   // 收取一批已到达的报文，返回条数；无数据时返回 0（**非阻塞**）。
   // out 会被复用：调用方通常预分配好容量，实现只覆盖 data 的内容。
   virtual std::size_t Recv(Batch* out, Time now) = 0;

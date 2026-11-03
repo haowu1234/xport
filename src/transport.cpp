@@ -96,6 +96,10 @@ void Transport::Tick(Time now) {
   // 4) 发送
   SendData(now);
 
+  // 5) 把排队的报文真正发出去。批量后端靠这一步把多个包合成一次 syscall；
+  //    不 flush 的话尾部报文会一直压在队列里，表现为传输莫名停住。
+  io_.FlushSend(now);
+
   stats_.srtt_ms = srtt_us_ / 1000.0;
   stats_.cwnd_kb = double(cc_.cwnd()) / 1024.0;
   stats_.ssthresh_kb = double(cc_.ssthresh()) / 1024.0;
@@ -164,7 +168,7 @@ void Transport::SendAck(Time now) {
   std::memcpy(buf + hn, payload, n);
 
   cc_.OnPacketSent(h.pkt_num);
-  io_.Send(Bytes(buf, hn + n), now);
+  io_.SendQueued(Bytes(buf, hn + n), now);
   ack_pending_ = false;
   ack_due_ = 0;
   recv_since_ack_ = 0;
@@ -187,7 +191,7 @@ void Transport::SendProbe(Time now) {
   std::memcpy(buf + hn, payload, n);
 
   cc_.OnPacketSent(h.pkt_num);
-  io_.Send(Bytes(buf, hn + n), now);
+  io_.SendQueued(Bytes(buf, hn + n), now);
 }
 
 void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* payload,
@@ -206,7 +210,7 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
   cc_.OnPacketSent(h.pkt_num);
   // 发送失败不是异常，而是又一个丢包源：登记在途，交给丢包检测 / PTO 重传。
   // 但必须计数——静默的本地丢弃和链路丢包在现象上一模一样，没有计数器就查不出来。
-  if (!io_.Send(Bytes(buf, hn + plen), now)) ++stats_.send_fail;
+  if (!io_.SendQueued(Bytes(buf, hn + plen), now)) ++stats_.send_fail;
 
   Sent& s = Slot(h.pkt_num);
   s.pn = h.pkt_num;
