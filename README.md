@@ -34,9 +34,9 @@ xport 在 UDP 之上实现了一套可靠、有序、支持多流复用的传输
 
 ## 架构
 
-![xport 协议架构](docs/figs/architecture.svg)
+![xport 协议架构](docs/figs/architecture-reference.png)
 
-<sub>图由 <code>scripts/plot_arch.py</code> 生成，常量与源码一致；改结构时同步更新脚本。</sub>
+<sub>架构图展示应用、Transport、IoEndpoint 与可替换后端之间的数据路径和反馈闭环。</sub>
 
 **分层原则**：`Transport` 不认识网络。它只依赖 `IoEndpoint` 的
 `Send(Bytes, Time)` 与 `Recv(Batch*, Time)`，所以"跑仿真"和"跑真 socket"是同一条代码路径。
