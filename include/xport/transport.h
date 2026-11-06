@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "xport/bbr.h"
+#include "xport/bbr3.h"
 #include "xport/cc.h"
 #include "xport/io.h"
 #include "xport/packet.h"
@@ -102,13 +103,23 @@ class Transport {
     return bbr_ ? *bbr_ : kIdle;
   }
   CcAlgo Algo() const { return cfg_.cc.algo; }
+  const Bbr3Cc& bbr3() const {
+    static const Bbr3Cc kIdle(CcConfig{}, Bbr3Params::V3());
+    return bbr3_ ? *bbr3_ : kIdle;
+  }
   bool UsingBbr() const { return use_bbr_; }
-  u64 CongestionEvents() const { return use_bbr_ ? bbr_->CongestionEvents() : cc_.CongestionEvents(); }
+  bool UsingBbr3() const { return use_bbr3_; }  // v2 或 v3
+  u64 CongestionEvents() const {
+    return use_bbr3_ ? bbr3_->CongestionEvents()
+                     : (use_bbr_ ? bbr_->CongestionEvents() : cc_.CongestionEvents());
+  }
   u64 PacingRateBps() const;
   const RateSampler& rate_sampler() const { return sampler_; }
   const RateSample& LastRateSample() const { return last_rate_sample_; }
-  u64 Cwnd() const { return use_bbr_ ? bbr_->cwnd() : cc_.cwnd(); }
-  u64 Ssthresh() const { return use_bbr_ ? 0 : cc_.ssthresh(); }  // BBR 没有 ssthresh
+  u64 Cwnd() const {
+    return use_bbr3_ ? bbr3_->cwnd() : (use_bbr_ ? bbr_->cwnd() : cc_.cwnd());
+  }
+  u64 Ssthresh() const { return use_bbr_ || use_bbr3_ ? 0 : cc_.ssthresh(); }  // BBR 没有 ssthresh
   u64 InFlight() const { return inflight_; }
   u64 SrttUs() const { return has_rtt_ ? u64(srtt_us_) : 0; }
   u64 FlowLimit() const { return flow_max_; }
@@ -148,6 +159,9 @@ class Transport {
     u32 rs_delivered_dt = 0;
     u32 rs_first_sent_dt = 0;
     u64 rs_delivered = 0;
+    // BBRv2/v3 的丢包模型用：发送后的在途量（上限受环形数组约束，远小于 4 GB）与累计判丢的低 32 位
+    u32 rs_tx_in_flight = 0;
+    u32 rs_lost = 0;
     Seg segs[kMaxSegsPerPacket];
 
     void StoreRate(const RateSnapshot& r) {
@@ -155,10 +169,12 @@ class Transport {
       rs_delivered_dt = SatDelta(t, r.delivered_t);
       rs_first_sent_dt = SatDelta(t, r.first_sent_t);
       rs_app_limited = r.is_app_limited;
+      rs_tx_in_flight = u32(r.tx_in_flight);
+      rs_lost = u32(r.lost);
     }
     RateSnapshot LoadRate() const {
       return RateSnapshot{rs_delivered, t - rs_delivered_dt, t - rs_first_sent_dt,
-                          rs_app_limited};
+                          rs_app_limited,     rs_tx_in_flight,      rs_lost};
     }
     // 超过 u32 时饱和：区间被算得更长、速率偏低，只会让带宽估计保守，不会虚高
     static u32 SatDelta(Time hi, Time lo) {
@@ -219,9 +235,11 @@ class Transport {
   // 拥塞控制分派。没用虚函数：两个分支都是内联小函数，分支预测稳定命中，
   // 而虚调用会挡住内联，CUBIC 热路径上的 cwnd()/InRecovery() 都变成间接调用
   bool CcInRecovery(Time sent_t) const {
+    if (use_bbr3_) return bbr3_->InRecovery(sent_t);
     return use_bbr_ ? bbr_->InRecovery(sent_t) : cc_.InRecovery(sent_t);
   }
   u64 CcBurstBytes() const {
+    if (use_bbr3_) return bbr3_->PacingBurstBytes();
     return use_bbr_ ? bbr_->PacingBurstBytes() : cc_.PacingBurstBytes();
   }
   void UpdateRtt(Time sample_us);
@@ -275,6 +293,9 @@ class Transport {
   // 构造时分配一次，不在热路径上。
   std::unique_ptr<BbrCc> bbr_;
   bool use_bbr_ = false;
+  // v2/v3 同理：按需堆分配，不选就不占 Transport 的体积
+  std::unique_ptr<Bbr3Cc> bbr3_;
+  bool use_bbr3_ = false;
   RateSampler sampler_;
   RateSample last_rate_sample_;  // 最近一次 ACK 产生的速率样本
 

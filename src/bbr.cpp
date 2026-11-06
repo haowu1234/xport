@@ -68,6 +68,7 @@ BbrCc::BbrCc(const CcConfig& cfg) : cfg_(cfg) {
   cwnd_ = double(cfg_.initial_cwnd);
   // 还没有 RTT 时按 1 ms 估（Linux bbr_init_pacing_rate_from_rtt 的默认值）
   pacing_rate_ = kHighGain * cwnd_ / 1e-3 * kPacingMargin;
+  if (cfg_.rng_seed != 0) rng_ = cfg_.rng_seed;
   EnterStartup();
 }
 

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 320" font-family="Helvetica, Arial, sans-serif">
+<rect width="820" height="320" fill="#fff"/>
+<text x="62" y="22" font-size="14" font-weight="600" fill="#1f2933">吞吐 vs 随机丢包（单流 · 50 Mbps · RTT 40 ms · 缓冲 2 BDP）</text>
+<line x1="62" y1="274.0" x2="700" y2="274.0" stroke="#e8edf2"/>
+<text x="56" y="278.0" font-size="11" fill="#6b7785" text-anchor="end">0.00</text>
+<line x1="62" y1="226.8" x2="700" y2="226.8" stroke="#e8edf2"/>
+<text x="56" y="230.8" font-size="11" fill="#6b7785" text-anchor="end">11</text>
+<line x1="62" y1="179.6" x2="700" y2="179.6" stroke="#e8edf2"/>
+<text x="56" y="183.6" font-size="11" fill="#6b7785" text-anchor="end">22</text>
+<line x1="62" y1="132.4" x2="700" y2="132.4" stroke="#e8edf2"/>
+<text x="56" y="136.4" font-size="11" fill="#6b7785" text-anchor="end">32</text>
+<line x1="62" y1="85.2" x2="700" y2="85.2" stroke="#e8edf2"/>
+<text x="56" y="89.2" font-size="11" fill="#6b7785" text-anchor="end">43</text>
+<line x1="62" y1="38.0" x2="700" y2="38.0" stroke="#e8edf2"/>
+<text x="56" y="42.0" font-size="11" fill="#6b7785" text-anchor="end">54</text>
+<text x="381.0" y="312" font-size="12" fill="#1f2933" text-anchor="middle">随机丢包率 %</text>
+<text x="14" y="156.0" font-size="12" fill="#1f2933" text-anchor="middle" transform="rotate(-90 14 156.0)">吞吐 Mbps</text>
+<line x1="62.0" y1="38" x2="62.0" y2="274" stroke="#e8edf2"/>
+<text x="62.0" y="290" font-size="11" fill="#6b7785" text-anchor="middle">0.00</text>
+<line x1="221.5" y1="38" x2="221.5" y2="274" stroke="#e8edf2"/>
+<text x="221.5" y="290" font-size="11" fill="#6b7785" text-anchor="middle">0.50</text>
+<line x1="381.0" y1="38" x2="381.0" y2="274" stroke="#e8edf2"/>
+<text x="381.0" y="290" font-size="11" fill="#6b7785" text-anchor="middle">1.0</text>
+<line x1="540.5" y1="38" x2="540.5" y2="274" stroke="#e8edf2"/>
+<text x="540.5" y="290" font-size="11" fill="#6b7785" text-anchor="middle">1.5</text>
+<line x1="700.0" y1="38" x2="700.0" y2="274" stroke="#e8edf2"/>
+<text x="700.0" y="290" font-size="11" fill="#6b7785" text-anchor="middle">2.0</text>
+<polyline points="62.0,59.8 93.9,230.4 381.0,260.1 700.0,264.9" fill="none" stroke="#7f8c8d" stroke-width="2.0"/>
+<circle cx="62.0" cy="59.8" r="3" fill="#7f8c8d"/>
+<circle cx="93.9" cy="230.4" r="3" fill="#7f8c8d"/>
+<circle cx="381.0" cy="260.1" r="3" fill="#7f8c8d"/>
+<circle cx="700.0" cy="264.9" r="3" fill="#7f8c8d"/>
+<rect x="714" y="37" width="12" height="12" fill="#7f8c8d"/>
+<text x="732" y="48" font-size="12" fill="#1f2933">CUBIC</text>
+<polyline points="62.0,64.3 93.9,64.4 381.0,66.4 700.0,69.2" fill="none" stroke="#e67e22" stroke-width="2.0"/>
+<circle cx="62.0" cy="64.3" r="3" fill="#e67e22"/>
+<circle cx="93.9" cy="64.4" r="3" fill="#e67e22"/>
+<circle cx="381.0" cy="66.4" r="3" fill="#e67e22"/>
+<circle cx="700.0" cy="69.2" r="3" fill="#e67e22"/>
+<rect x="714" y="55" width="12" height="12" fill="#e67e22"/>
+<text x="732" y="66" font-size="12" fill="#1f2933">BBRv1</text>
+<polyline points="62.0,67.0 93.9,73.5 381.0,103.2 700.0,142.8" fill="none" stroke="#2980b9" stroke-width="2.0"/>
+<circle cx="62.0" cy="67.0" r="3" fill="#2980b9"/>
+<circle cx="93.9" cy="73.5" r="3" fill="#2980b9"/>
+<circle cx="381.0" cy="103.2" r="3" fill="#2980b9"/>
+<circle cx="700.0" cy="142.8" r="3" fill="#2980b9"/>
+<rect x="714" y="73" width="12" height="12" fill="#2980b9"/>
+<text x="732" y="84" font-size="12" fill="#1f2933">BBRv2</text>
+<polyline points="62.0,66.8 93.9,74.7 381.0,92.2 700.0,158.6" fill="none" stroke="#c0392b" stroke-width="2.0"/>
+<circle cx="62.0" cy="66.8" r="3" fill="#c0392b"/>
+<circle cx="93.9" cy="74.7" r="3" fill="#c0392b"/>
+<circle cx="381.0" cy="92.2" r="3" fill="#c0392b"/>
+<circle cx="700.0" cy="158.6" r="3" fill="#c0392b"/>
+<rect x="714" y="91" width="12" height="12" fill="#c0392b"/>
+<text x="732" y="102" font-size="12" fill="#1f2933">BBRv3</text>
+<line x1="62" y1="55.5" x2="700" y2="55.5" stroke="#1f2933" stroke-dasharray="5 4"/>
+<text x="696" y="50.5" font-size="11" fill="#1f2933" text-anchor="end">链路 50 Mbps</text>
+</svg>

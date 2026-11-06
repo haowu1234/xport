@@ -21,6 +21,16 @@ u64 Rng::Below(u64 n) { return n == 0 ? 0 : Next() % n; }
 
 SimLink::SimLink(const LinkParams& p) : p_(p), rng_(p.seed) {}
 
+void SimLink::SetBottleneckGroup(u32 to, u32 group) {
+  custom_ = true;
+  group_[to] = group;
+}
+
+void SimLink::SetExtraDelay(u32 to, Time us) {
+  custom_ = true;
+  extra_delay_[to] = us;
+}
+
 void SimLink::Send(u32 /*from*/, u32 to, Bytes pkt, Time now) {
   // 确定性丢包窗口优先于随机丢包：用于制造孤立的一次拥塞事件
   if (now >= p_.loss_from_us && now < p_.loss_to_us) {
@@ -37,7 +47,7 @@ void SimLink::Send(u32 /*from*/, u32 to, Bytes pkt, Time now) {
   // 出口带宽串行化：1 Mbps == 1 bit/us
   Time depart = now;
   if (p_.bandwidth_mbps > 0.0) {
-    Time& busy = busy_until_[to];
+    Time& busy = busy_until_[GroupOf(to)];
     if (busy < now) busy = now;
 
     const Time tx = Time(double(pkt.size()) * 8.0 / p_.bandwidth_mbps + 0.5);
@@ -54,8 +64,13 @@ void SimLink::Send(u32 /*from*/, u32 to, Bytes pkt, Time now) {
     busy = depart + tx;
   }
 
+  Time prop = p_.delay_us;
+  if (custom_) {
+    auto it = extra_delay_.find(to);
+    if (it != extra_delay_.end()) prop += it->second;
+  }
   const auto enqueue = [&](Time at) {
-    Item it{at + p_.delay_us, seq_++, std::vector<u8>(pkt.begin(), pkt.end())};
+    Item it{at + prop, seq_++, std::vector<u8>(pkt.begin(), pkt.end())};
     queues_[to].push(std::move(it));
   };
 
@@ -85,8 +100,14 @@ std::size_t SimLink::in_flight() const {
   return n;
 }
 
+Time SimLink::backlog_us(u32 to, Time now) const {
+  auto it = busy_until_.find(GroupOf(to));
+  if (it == busy_until_.end() || it->second <= now) return 0;
+  return it->second - now;
+}
+
 std::size_t SimLink::queue_depth(u32 to, Time now) const {
-  auto it = busy_until_.find(to);
+  auto it = busy_until_.find(GroupOf(to));
   if (it == busy_until_.end() || it->second <= now) return 0;
   const Time backlog_us = it->second - now;
   const double bytes = p_.bandwidth_mbps > 0 ? p_.bandwidth_mbps * double(backlog_us) / 8.0 : 0.0;

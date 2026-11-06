@@ -25,6 +25,9 @@ struct RateSnapshot {
   Time delivered_t = 0;       // 发送时最近一次确认的时刻
   Time first_sent_t = 0;      // 发送时所在"发送区间"的起点
   bool is_app_limited = false;
+  // BBRv2/v3 的丢包模型用（draft §4.1.2.2 的 P.tx_in_flight / P.lost）：
+  u64 tx_in_flight = 0;       // 发出本包之后的在途字节（含本包）
+  u64 lost = 0;               // 发送时的累计判丢字节
 };
 
 // 一个 ACK 产生的样本。valid=false 时其余字段不可用。
@@ -36,6 +39,11 @@ struct RateSample {
   u64 prior_delivered = 0;
   bool is_app_limited = false;
   bool valid = false;
+  // 定界包发出时的在途量，以及从它发出到现在判丢的字节数。
+  // 只要本 ACK 确认了包就有值，不受 valid（区间是否可信）影响：
+  // 丢包率判定看的是"那一批在途数据丢了多少"，和速率区间无关。
+  u64 tx_in_flight = 0;
+  u64 lost = 0;
 
   // 字节/秒
   u64 RateBps() const {
@@ -48,15 +56,20 @@ class RateSampler {
  public:
   // 每发出一个登记在途的包调用（重传同样要调：它也占带宽、也会被确认）。
   // inflight_before 是登记本包之前的在途字节。
-  RateSnapshot OnPacketSent(Time now, u64 inflight_before) {
+  RateSnapshot OnPacketSent(Time now, u64 inflight_before, u64 bytes = 0) {
     // 在途为空说明之前有过静默期，发送区间和确认时钟都从现在重新起算，
     // 否则静默期会被算进 interval，样本被稀释成低速率。
     if (inflight_before == 0) {
       first_sent_t_ = now;
       delivered_t_ = now;
     }
-    return RateSnapshot{delivered_, delivered_t_, first_sent_t_, app_limited_ != 0};
+    return RateSnapshot{delivered_, delivered_t_, first_sent_t_, app_limited_ != 0,
+                        inflight_before + bytes, lost_};
   }
+
+  // 每判丢一个包调用一次（在把它交给拥塞控制之前），维护 draft 的 C.lost。
+  void OnPacketLost(u64 bytes) { lost_ += bytes; }
+  u64 lost() const { return lost_; }
 
   // ACK 中每个新确认的包调用一次（顺序无所谓），全部调完后调 Finish。
   void OnPacketAcked(const RateSnapshot& p, Time sent_t, u64 bytes, Time now) {
@@ -70,6 +83,8 @@ class RateSampler {
       prior_delivered_ = p.delivered;
       prior_sent_t_ = sent_t;
       prior_app_limited_ = p.is_app_limited;
+      prior_tx_in_flight_ = p.tx_in_flight;
+      prior_lost_ = p.lost;
       send_elapsed_ = sent_t > p.first_sent_t ? sent_t - p.first_sent_t : 0;
       ack_elapsed_ = now > p.delivered_t ? now - p.delivered_t : 0;
       // 下一个发送区间从这个包的发送时刻开始
@@ -89,6 +104,9 @@ class RateSampler {
     rs.delivered = delivered_ - prior_delivered_;
     rs.prior_delivered = prior_delivered_;
     rs.is_app_limited = prior_app_limited_;
+    rs.tx_in_flight = prior_tx_in_flight_;
+    // 32 位取模相减：Sent 里只存了 lost 的低 32 位（单个包的生命周期内丢失远小于 4 GB）
+    rs.lost = u64(u32(u32(lost_) - u32(prior_lost_)));
     rs.send_elapsed_us = send_elapsed_;
     rs.ack_elapsed_us = ack_elapsed_;
     rs.interval_us = send_elapsed_ > ack_elapsed_ ? send_elapsed_ : ack_elapsed_;
@@ -116,6 +134,7 @@ class RateSampler {
   Time delivered_t_ = 0;
   Time first_sent_t_ = 0;
   u64 app_limited_ = 0;  // 0 = 不受限；否则为"delivered 超过它时解除"的阈值
+  u64 lost_ = 0;
 
   // 单个 ACK 内的累积
   bool have_ = false;
@@ -124,6 +143,8 @@ class RateSampler {
   bool prior_app_limited_ = false;
   Time send_elapsed_ = 0;
   Time ack_elapsed_ = 0;
+  u64 prior_tx_in_flight_ = 0;
+  u64 prior_lost_ = 0;
 };
 
 }  // namespace xport
