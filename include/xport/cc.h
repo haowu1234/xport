@@ -23,6 +23,7 @@ enum class CcPhase : u8 {
 enum class CcAlgo : u8 {
   kCubic = 0,
   kReno = 1,  // 对照组：AIMD，用于证明 CUBIC 在高 BDP 下的收益
+  kBbr = 2,   // BBR v1，见 bbr.h。由 transport 分派到 BbrCc，CubicCc 不处理这个值
 };
 
 const char* CcPhaseName(CcPhase p);

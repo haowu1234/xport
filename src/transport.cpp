@@ -19,6 +19,8 @@ Transport::Transport(SimLink& link, u32 self, u32 peer, const TransportConfig& c
       io_(*owned_io_),
       cfg_(cfg),
       cc_(cfg.cc),
+      bbr_(cfg.cc.algo == CcAlgo::kBbr ? std::make_unique<BbrCc>(cfg.cc) : nullptr),
+      use_bbr_(bbr_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -28,6 +30,8 @@ Transport::Transport(IoEndpoint& io, const TransportConfig& cfg)
       io_(io),
       cfg_(cfg),
       cc_(cfg.cc),
+      bbr_(cfg.cc.algo == CcAlgo::kBbr ? std::make_unique<BbrCc>(cfg.cc) : nullptr),
+      use_bbr_(bbr_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -101,11 +105,15 @@ void Transport::Tick(Time now) {
   io_.FlushSend(now);
 
   stats_.srtt_ms = srtt_us_ / 1000.0;
-  stats_.cwnd_kb = double(cc_.cwnd()) / 1024.0;
-  stats_.ssthresh_kb = double(cc_.ssthresh()) / 1024.0;
+  stats_.cwnd_kb = double(Cwnd()) / 1024.0;
+  stats_.ssthresh_kb = double(Ssthresh()) / 1024.0;
   stats_.pto_ms = double(PtoBackoff()) / 1000.0;
-  stats_.pacing_mbps =
-      double(cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000)) * 8.0 / 1e6;
+  stats_.pacing_mbps = double(PacingRateBps()) * 8.0 / 1e6;
+}
+
+u64 Transport::PacingRateBps() const {
+  // CUBIC 由 cwnd/SRTT 推出速率；BBR 直接给出 pacing_gain × BtlBw
+  return use_bbr_ ? bbr_->PacingRateBps() : cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000);
 }
 
 void Transport::SendAck(Time now) {
@@ -208,6 +216,8 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
   std::memcpy(buf + hn, payload, plen);
 
   cc_.OnPacketSent(h.pkt_num);
+  // 速率采样：在 inflight 增长之前拍快照，拍完再增长——快照记录的是"发出本包时"的状态
+  const RateSnapshot snap = sampler_.OnPacketSent(now, inflight_);
   // 发送失败不是异常，而是又一个丢包源：登记在途，交给丢包检测 / PTO 重传。
   // 但必须计数——静默的本地丢弃和链路丢包在现象上一模一样，没有计数器就查不出来。
   if (!io_.SendQueued(Bytes(buf, hn + plen), now)) ++stats_.send_fail;
@@ -219,6 +229,7 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
   s.seg_count = u8(nseg);
   s.used = true;
   s.acked = false;
+  s.StoreRate(snap);  // 必须在 s.t 赋值之后：差值相对 s.t 存放
   last_send_t_ = now;
   if (probe_budget_ > 0) --probe_budget_;
   for (u32 i = 0; i < nseg; ++i) s.segs[i] = segs[i];
@@ -256,7 +267,7 @@ void Transport::SendStreamPacket(u32 sid, u64 off, u32 len, Time now, bool retra
 }
 
 void Transport::RefillPacer(Time now) {
-  const double burst = double(cc_.PacingBurstBytes());
+  const double burst = double(CcBurstBytes());
 
   if (!pace_init_) {
     pace_init_ = true;
@@ -266,7 +277,7 @@ void Transport::RefillPacer(Time now) {
   }
   if (now <= last_pace_) return;
 
-  const double rate = double(cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000));
+  const double rate = double(PacingRateBps());
   const double dt = double(now - last_pace_) / 1e6;
   tokens_ = std::min(tokens_ + rate * dt, burst);
   last_pace_ = now;
@@ -275,7 +286,7 @@ void Transport::RefillPacer(Time now) {
 void Transport::SendData(Time now) {
   RefillPacer(now);
 
-  const u64 cwnd = cc_.cwnd();
+  const u64 cwnd = Cwnd();
 
   // 流控状态只在"额度确实不足"时置位，避免把 cwnd 阻塞误判成流控阻塞
   if (sent_high_water_ + kMaxStreamPayload > flow_max_) {
@@ -294,6 +305,7 @@ void Transport::SendData(Time now) {
   Seg segs[kMaxSegsPerPacket];
   u32 nseg = 0;
   u32 batch_bytes = 0;
+  bool out_of_data = false;  // 循环是否因 DRR 找不到可发数据而结束
 
   const auto flush = [&]() {
     if (nseg == 0) return;
@@ -385,6 +397,7 @@ void Transport::SendData(Time now) {
         }
       }
 #endif
+      out_of_data = true;
       break;
     }
 
@@ -416,6 +429,19 @@ void Transport::SendData(Time now) {
     if (nseg >= kMaxSegsPerPacket) flush();
   }
   flush();
+
+  // 应用受限标记：发送循环因为"没有新数据可发"而停下（不是被 cwnd/pacing/流控挡住），
+  // 说明带宽没有被用满。标记后直到当前在途的数据全部被确认之前，所有发出的包都带
+  // app-limited 标签——BBR 看到这个标签会拒绝用它们的样本来抬高 max_bw。
+  // 直接复用 DRR 找不到数据时的那次判断，而不是循环后再调 HasUnsentData() 扫一遍
+  // 流表：后者每个 Tick 都是 O(流数)。流因流控被跳过时 flow_blocked_ 必然已置位
+  // （单段长度不超过 kMaxStreamPayload），所以这里排除它就够了。
+  if (out_of_data && !flow_blocked_ && inflight_ + kMaxStreamPayload <= cwnd) {
+    sampler_.OnAppLimited(inflight_);
+  }
+  // ProbeRTT 主动把在途压到 4 包，这期间的低速样本同样不代表网络变慢（Linux 进入
+  // ProbeRTT 时也会置 app_limited），否则 10 轮窗口里会混进几个很低的值
+  if (use_bbr_ && bbr_->InProbeRtt()) sampler_.OnAppLimited(inflight_);
 }
 
 void Transport::OnPacket(Bytes pkt, Time now) {
@@ -570,7 +596,9 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   const u64 largest = AckLargest(a);
   // 窗口是否被用满，要看这批包被确认**之前**的在途量——确认之后在途必然变小
   const bool cwnd_limited = cc_.IsCwndLimited(inflight_);
+  const u64 prior_inflight = inflight_;
   u64 acked_bytes = 0;
+  Time newest_sent_t = 0;  // 本 ACK 确认的包里最晚发出的那个（BBR 判定退出恢复期）
   u64 max_acked_pn = 0;
   bool newly_acked = false;
   u64 sample = 0;
@@ -578,7 +606,14 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   // 只为"最大被确认包"采样。每个重传用新包号，所以样本不会像 TCP 那样有歧义。
   // 有了按包号索引的环形数组，这一步是 O(1)，不再是全表扫描。
   if (!has_largest_acked_ || largest > largest_acked_) {
-    if (InUse(largest)) sample = now - Slot(largest).t;
+    // 已被判丢（槽位释放但 pn 未被复用、也没被确认过）的包，确认到达时同样是有效的
+    // RTT 样本。只认在途包会形成死锁：排队把 RTT 拉长到超过时间阈值后，所有包都在
+    // ACK 到达前被判丢 → 永远拿不到新样本 → SRTT 冻结 → 阈值不放宽 → 重传也被判丢。
+    // 深缓冲下 BBR Startup 冲出 ~100 ms 队列时实测必现（10 Mbps / RTT 20 ms）。
+    const Sent& ls = Slot(largest);
+    if (ls.pn == largest && !ls.acked && (ls.used || largest < next_pn_)) {
+      sample = now > ls.t ? now - ls.t : 0;
+    }
     largest_acked_ = largest;
     has_largest_acked_ = true;
   }
@@ -613,6 +648,9 @@ void Transport::OnAck(const AckFrame& a, Time now) {
       }
       acked_bytes += s.bytes;
       if (pn > max_acked_pn) max_acked_pn = pn;
+      if (s.t > newest_sent_t) newest_sent_t = s.t;
+      // 速率采样：喂给采样器，用最晚发出的那个包定界
+      sampler_.OnPacketAcked(s.LoadRate(), s.t, s.bytes, now);
       s.acked = true;
       newly_acked = true;
       Forget(pn);
@@ -625,17 +663,45 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   }
   // 有新包被确认，说明路径通了：退避清零（RFC 9002 §6.2.1）
   if (newly_acked) pto_count_ = 0;
-  // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
-  cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
-            has_rtt_ ? u64(srtt_us_) : 0, sample, cwnd_limited);
+  if (!use_bbr_) {
+    // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
+    cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
+              has_rtt_ ? u64(srtt_us_) : 0, sample, cwnd_limited);
 
-  DetectLoss(now);
+    DetectLoss(now);
+
+    // 速率采样：ACK 处理和丢包检测都结束后完成本轮采样。
+    // min_rtt 过滤用 delay_min（CubicCc 维护的全程最小 RTT），没有样本时传 0 跳过过滤。
+    last_rate_sample_ = sampler_.Finish(
+        cc_.DelayMinUs() < 1e17 ? Time(cc_.DelayMinUs()) : 0);
+    return;
+  }
+
+  // BBR：顺序和 CUBIC 不同——先判丢再交给 CC。BBR 要在同一次调用里看到本 ACK 的
+  // 确认量和丢失量（包守恒、ProbeBW 探测相的退出条件都依赖两者），而 OnCongestion
+  // 只是登记恢复期，真正的窗口调整发生在随后的 OnAck 里。
+  const u64 lost_bytes = DetectLoss(now);
+  last_rate_sample_ = sampler_.Finish(bbr_->MinRttUs());
+
+  BbrAck ba;
+  ba.now = now;
+  ba.acked = acked_bytes;
+  ba.lost = lost_bytes;
+  ba.prior_inflight = prior_inflight;
+  ba.inflight = inflight_;
+  ba.delivered = sampler_.delivered();
+  ba.rtt_us = sample;
+  ba.has_newest_acked = newly_acked;
+  ba.newest_acked_sent_t = newest_sent_t;
+  ba.rs = last_rate_sample_;
+  bbr_->OnAck(ba);
 }
 
 // 丢包检测：两条 RFC 9002 规则，都改成"只走近真正需要检查的包号"。
 // 原实现对每个在途包做一遍判断，等于把 ACK 成本重新变回 O(在途包数)。
-void Transport::DetectLoss(Time now) {
-  if (!has_largest_acked_ || inflight_pkts_ == 0) return;
+u64 Transport::DetectLoss(Time now) {
+  if (!has_largest_acked_ || inflight_pkts_ == 0) return 0;
+  u64 lost_bytes = 0;
 
   const double srtt = has_rtt_ ? srtt_us_ : 100000.0;
   const Time time_threshold = std::max<Time>(Time(srtt * 1.125), 2000);
@@ -653,6 +719,7 @@ void Transport::DetectLoss(Time now) {
       if (!pc_any || pn > pc_hi_pn) { pc_hi_pn = pn; pc_hi_t = t; }
       pc_any = true;
     }
+    lost_bytes += s.bytes;
     const u32 n = s.seg_count;
     Seg segs[kMaxSegsPerPacket];
     for (u32 i = 0; i < n; ++i) segs[i] = s.segs[i];
@@ -663,7 +730,7 @@ void Transport::DetectLoss(Time now) {
     ++stats_.lost;
     // 恢复期内的包丢失不构成新的拥塞事件：否则一次拥塞会被重复降窗，
     // cwnd 会以 RTT 为周期被连续砍成指数衰减。
-    if (!cc_.InRecovery(t)) congested = true;
+    if (!CcInRecovery(t)) congested = true;
   };
 
   // 规则一：包阈值。pn + 3 <= largest_acked 仍未确认 → 判丢。
@@ -692,7 +759,13 @@ void Transport::DetectLoss(Time now) {
     declare_lost(oldest_pn_);
   }
 
-  if (congested) cc_.OnCongestion(now);
+  if (congested) {
+    if (use_bbr_) {
+      bbr_->OnCongestion(now);
+    } else {
+      cc_.OnCongestion(now);
+    }
+  }
 
   // 持续拥塞（RFC 9002 §7.6）：丢失的包横跨了 threshold × PTO，且中间没有任何包被确认，
   // 说明这段时间路径整体不通。这时一次 β 降窗不够，窗口要回到最小值重新慢启动。
@@ -709,10 +782,15 @@ void Transport::DetectLoss(Time now) {
       }
     }
     if (!gap_acked) {
-      cc_.OnPersistentCongestion(now);
+      if (use_bbr_) {
+        bbr_->OnPersistentCongestion(now);
+      } else {
+        cc_.OnPersistentCongestion(now);
+      }
       ++stats_.persistent_congestion;
     }
   }
+  return lost_bytes;
 }
 
 void Transport::OnPtoTimeout() {

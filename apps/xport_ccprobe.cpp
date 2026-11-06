@@ -12,6 +12,10 @@
 // 用法：
 //   xport_ccprobe --scenario cubic --out build/traces/cubic.csv
 //   xport_ccprobe --scenario sawtooth --algo reno --out build/traces/sawtooth_reno.csv
+//   xport_ccprobe --scenario hystart --algo bbr --out build/traces/hystart_bbr.csv
+//
+// --algo bbr 时 CSV 列不变（画图脚本不用改）：ssthresh/target/w_max/k/epoch/pre_cong
+// 这些 CUBIC 专属列填 0，phase 列填 BbrState 的数值，target_kb 列填 BBR 的 BDP 估计。
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -81,7 +85,8 @@ int main(int argc, char** argv) {
     } else if (a == "--out" && i + 1 < argc) {
       out = argv[++i];
     } else {
-      std::printf("用法: xport_ccprobe [--scenario cubic|hystart|sawtooth] [--algo cubic|reno] "
+      std::printf("用法: xport_ccprobe [--scenario cubic|hystart|sawtooth|longhaul] "
+                  "[--algo cubic|reno|bbr] "
                   "[--out <csv>]\n");
       return 2;
     }
@@ -97,7 +102,16 @@ int main(int argc, char** argv) {
   }
 
   TransportConfig tcfg;
-  tcfg.cc.algo = (algo == "reno") ? CcAlgo::kReno : CcAlgo::kCubic;
+  if (algo == "reno") {
+    tcfg.cc.algo = CcAlgo::kReno;
+  } else if (algo == "bbr") {
+    tcfg.cc.algo = CcAlgo::kBbr;
+  } else if (algo == "cubic") {
+    tcfg.cc.algo = CcAlgo::kCubic;
+  } else {
+    std::printf("未知算法: %s\n", algo.c_str());
+    return 2;
+  }
   tcfg.cc.hystart = (hystart != "off");
 
   LinkParams lp;
@@ -162,7 +176,18 @@ int main(int argc, char** argv) {
     if (now >= next_sample) {
       next_sample = now + sc->sample_us;
       const CubicCc& cc = a.cc();
-      if (f != nullptr) {
+      const bool bbr = a.UsingBbr();
+      if (f != nullptr && bbr) {
+        const BbrCc& bb = a.bbr();
+        std::fprintf(f, "%.3f,%.2f,0,%.2f,%.2f,%.3f,%.2f,%d,%llu,0,0,0,%zu,%llu,%llu,"
+                        "%.2f,%.1f,%.3f,0\n",
+                     double(now) / 1000.0, Kb(bb.cwnd()), Kb(bb.BdpBytes()), Kb(a.InFlight()),
+                     double(a.SrttUs()) / 1000.0, double(a.PacingRateBps()) * 8.0 / 1e6,
+                     int(bb.state()), (unsigned long long)bb.RoundCount(),
+                     link.queue_depth(2, now), (unsigned long long)a.stats().retransmits,
+                     (unsigned long long)a.stats().lost, Kb(b.DeliveredBytes()), sc->bw_mbps,
+                     2.0 * double(sc->delay_us) / 1000.0);
+      } else if (f != nullptr) {
         std::fprintf(f, "%.3f,%.2f,%.2f,%.2f,%.2f,%.3f,%.2f,%d,%llu,%.2f,%.4f,%.3f,%zu,%llu,%llu,"
                         "%.2f,%.1f,%.3f,%.2f\n",
                      double(now) / 1000.0, Kb(cc.cwnd()), Kb(cc.ssthresh()),
@@ -175,7 +200,7 @@ int main(int argc, char** argv) {
                      (unsigned long long)a.stats().lost, Kb(b.DeliveredBytes()), sc->bw_mbps,
                      2.0 * double(sc->delay_us) / 1000.0, Kb(cc.LastPreCongestionCwnd()));
       }
-      last_events = cc.CongestionEvents();
+      last_events = a.CongestionEvents();
       (void)last_events;
     }
   }
@@ -199,15 +224,21 @@ int main(int argc, char** argv) {
   std::printf("  交付吞吐          %.2f Mbps  (链路 %.0f Mbps 的 %.1f%%)\n", mbps, sc->bw_mbps,
               sc->bw_mbps > 0 ? 100.0 * mbps / sc->bw_mbps : 0.0);
   std::printf("  拥塞事件          %llu 次（平均间隔 %.0f ms）\n",
-              (unsigned long long)a.cc().CongestionEvents(),
-              a.cc().CongestionEvents() ? secs * 1000.0 / double(a.cc().CongestionEvents()) : 0.0);
+              (unsigned long long)a.CongestionEvents(),
+              a.CongestionEvents() ? secs * 1000.0 / double(a.CongestionEvents()) : 0.0);
   std::printf("  丢包/重传         %llu / %llu  (重传率 %.2f%%)\n", (unsigned long long)sa.lost,
               (unsigned long long)sa.retransmits,
               sa.pkts_sent ? 100.0 * double(sa.retransmits) / double(sa.pkts_sent) : 0.0);
   std::printf("  队列丢弃          %llu 包（尾丢弃 = 慢启动冲过头）\n",
               (unsigned long long)link.queue_drops());
-  std::printf("  最终 cwnd         %.1f KB  (BDP 的 %.0f%%)\n", Kb(a.cc().cwnd()),
-              bw_bdp_kb > 0 ? 100.0 * Kb(a.cc().cwnd()) / bw_bdp_kb : 0.0);
+  std::printf("  最终 cwnd         %.1f KB  (BDP 的 %.0f%%)\n", Kb(a.Cwnd()),
+              bw_bdp_kb > 0 ? 100.0 * Kb(a.Cwnd()) / bw_bdp_kb : 0.0);
+  if (a.UsingBbr()) {
+    const BbrCc& bb = a.bbr();
+    std::printf("  BBR 状态          %s · BtlBw %.1f Mbps · RTprop %.2f ms · ProbeRTT %llu 次\n",
+                BbrStateName(bb.state()), double(bb.BtlBwBps()) * 8.0 / 1e6,
+                double(bb.MinRttUs()) / 1000.0, (unsigned long long)bb.ProbeRttCount());
+  }
   std::printf("  交付进度          %.1f%%  (%s)\n",
               100.0 * double(cmp) / double(payload.size()),
               complete ? "已完成" : "时间窗结束，未跑完");
