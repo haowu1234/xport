@@ -18,7 +18,17 @@ const char* CcPhaseName(CcPhase p) {
   return "?";
 }
 
-const char* CcAlgoName(CcAlgo a) { return a == CcAlgo::kCubic ? "cubic" : "reno"; }
+const char* CcAlgoName(CcAlgo a) {
+  switch (a) {
+    case CcAlgo::kCubic:
+      return "cubic";
+    case CcAlgo::kReno:
+      return "reno";
+    case CcAlgo::kBbr:
+      return "bbr";
+  }
+  return "?";
+}
 
 CubicCc::CubicCc(const CcConfig& cfg) : cfg_(cfg) {
   cwnd_ = double(cfg_.initial_cwnd);

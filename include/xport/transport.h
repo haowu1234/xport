@@ -5,7 +5,7 @@
 //   * 包级可靠传输：SACK 区间 ACK + 包阈值/时间阈值丢包检测 + PTO（RFC 9002）
 //   * 批量收发：SendQueued + FlushSend，后端可把多包合成一次 syscall
 //   * 恢复期（recovery period）：同一窗口内只降一次窗，避免被重复砍
-//   * 拥塞控制：CUBIC + HyStart++（见 cc.h），可切 Reno 做对照
+//   * 拥塞控制：CUBIC + HyStart++（见 cc.h），可切 Reno 做对照，或切 BBR v1（见 bbr.h）
 //   * pacing：令牌桶按 cwnd/SRTT 放行，杜绝"一次 Tick 倒空整个窗口"
 //   * 流控：MAX_DATA 连接级窗口 + 半窗更新，附带流控探测防死锁
 //   * 多流调度：DRR（deficit round robin），按字节公平
@@ -21,10 +21,12 @@
 #include <tuple>
 #include <vector>
 
+#include "xport/bbr.h"
 #include "xport/cc.h"
 #include "xport/io.h"
 #include "xport/packet.h"
 #include "xport/ranges.h"
+#include "xport/rate_sample.h"
 #include "xport/sim.h"
 #include "xport/types.h"
 
@@ -92,9 +94,21 @@ class Transport {
   std::size_t RecvBufferSize(u32 sid) const;
 
   // ---- 诊断接口（bench / 轨迹探针 / 图表用）----
+  // CUBIC/Reno 的内部状态。algo 为 kBbr 时这个对象不参与控制，读 bbr()
   const CubicCc& cc() const { return cc_; }
-  u64 Cwnd() const { return cc_.cwnd(); }
-  u64 Ssthresh() const { return cc_.ssthresh(); }
+  // 非 BBR 连接返回一个静态的初始状态对象，方便诊断代码无条件调用
+  const BbrCc& bbr() const {
+    static const BbrCc kIdle;
+    return bbr_ ? *bbr_ : kIdle;
+  }
+  CcAlgo Algo() const { return cfg_.cc.algo; }
+  bool UsingBbr() const { return use_bbr_; }
+  u64 CongestionEvents() const { return use_bbr_ ? bbr_->CongestionEvents() : cc_.CongestionEvents(); }
+  u64 PacingRateBps() const;
+  const RateSampler& rate_sampler() const { return sampler_; }
+  const RateSample& LastRateSample() const { return last_rate_sample_; }
+  u64 Cwnd() const { return use_bbr_ ? bbr_->cwnd() : cc_.cwnd(); }
+  u64 Ssthresh() const { return use_bbr_ ? 0 : cc_.ssthresh(); }  // BBR 没有 ssthresh
   u64 InFlight() const { return inflight_; }
   u64 SrttUs() const { return has_rtt_ ? u64(srtt_us_) : 0; }
   u64 FlowLimit() const { return flow_max_; }
@@ -127,7 +141,30 @@ class Transport {
     u8 seg_count = 0;
     bool used = false;
     bool acked = false;  // 因被确认而释放（区别于判丢释放），持续拥塞判定要用
+    bool rs_app_limited = false;  // 以下四个字段是压缩存放的 RateSnapshot
+    // 两个时刻都不晚于发送时刻 t，存成相对 t 的 u32 差值（µs，上限约 71 分钟）。
+    // 原样存 RateSnapshot 要 32 B，Sent 从 152 B 涨到 184 B，实测发送路径慢约 5 ns/包；
+    // 压缩后只多 16 B，app_limited 标记塞进原来的对齐空洞。
+    u32 rs_delivered_dt = 0;
+    u32 rs_first_sent_dt = 0;
+    u64 rs_delivered = 0;
     Seg segs[kMaxSegsPerPacket];
+
+    void StoreRate(const RateSnapshot& r) {
+      rs_delivered = r.delivered;
+      rs_delivered_dt = SatDelta(t, r.delivered_t);
+      rs_first_sent_dt = SatDelta(t, r.first_sent_t);
+      rs_app_limited = r.is_app_limited;
+    }
+    RateSnapshot LoadRate() const {
+      return RateSnapshot{rs_delivered, t - rs_delivered_dt, t - rs_first_sent_dt,
+                          rs_app_limited};
+    }
+    // 超过 u32 时饱和：区间被算得更长、速率偏低，只会让带宽估计保守，不会虚高
+    static u32 SatDelta(Time hi, Time lo) {
+      const Time d = hi > lo ? hi - lo : 0;
+      return d > 0xffffffffull ? 0xffffffffu : u32(d);
+    }
   };
   struct OutStream {
     std::vector<u8> data;   // 用户已提交的全部字节
@@ -177,7 +214,16 @@ class Transport {
     return (recv_bits_[idx >> 6] >> (idx & 63)) & 1ull;
   }
   void MarkRecv(std::size_t idx) { recv_bits_[idx >> 6] |= 1ull << (idx & 63); }
-  void DetectLoss(Time now);
+  // 返回本次判丢的字节数（BBR 的包守恒和换相判据要用）
+  u64 DetectLoss(Time now);
+  // 拥塞控制分派。没用虚函数：两个分支都是内联小函数，分支预测稳定命中，
+  // 而虚调用会挡住内联，CUBIC 热路径上的 cwnd()/InRecovery() 都变成间接调用
+  bool CcInRecovery(Time sent_t) const {
+    return use_bbr_ ? bbr_->InRecovery(sent_t) : cc_.InRecovery(sent_t);
+  }
+  u64 CcBurstBytes() const {
+    return use_bbr_ ? bbr_->PacingBurstBytes() : cc_.PacingBurstBytes();
+  }
   void UpdateRtt(Time sample_us);
   // 基础 PTO（不含退避）。持续拥塞时长也按它算。
   Time Pto() const;
@@ -223,6 +269,14 @@ class Transport {
   double srtt_us_ = 0;
   double rttvar_us_ = 0;
   CubicCc cc_;
+  // 堆上分配、只在选了 BBR 时分配。内联存放会让 Transport 多出 368 B：实测在未改动的
+  // 基线上只加同样大小的填充，CUBIC 发送路径就慢 ~12%（cpubench Tick 136 → 152 ns/包），
+  // 原因是热成员之间的布局与栈上对象的缓存行分布变了，与 BBR 逻辑无关。
+  // 构造时分配一次，不在热路径上。
+  std::unique_ptr<BbrCc> bbr_;
+  bool use_bbr_ = false;
+  RateSampler sampler_;
+  RateSample last_rate_sample_;  // 最近一次 ACK 产生的速率样本
 
   // 流控：recv_high_water_ 是本端收到的"各流最高偏移之和"，
   // 对端据此发 MAX_DATA；sent_high_water_ 是对应方向的已发送量。

@@ -243,8 +243,9 @@ int main(int argc, char** argv) {
                            : 0.0);
   std::printf(" 拥塞窗口      %.1f KB  (ssthresh %.1f KB)\n", sa.cwnd_kb, sa.ssthresh_kb);
   std::printf(" 拥塞控制      %s · %s · 事件 %llu 次 · pacing %.0f Mbps\n",
-              CcAlgoName(a.cc().algo()), CcPhaseName(a.cc().phase()),
-              (unsigned long long)a.cc().CongestionEvents(), sa.pacing_mbps);
+              CcAlgoName(a.Algo()),
+              a.UsingBbr() ? BbrStateName(a.bbr().state()) : CcPhaseName(a.cc().phase()),
+              (unsigned long long)a.CongestionEvents(), sa.pacing_mbps);
   std::printf(" 流控          MAX_DATA 上限 %.1f KB · 已发 %.1f KB · 阻塞 %llu 次\n",
               double(a.FlowLimit()) / 1024.0, double(a.SentHighWater()) / 1024.0,
               (unsigned long long)sa.flow_blocked);

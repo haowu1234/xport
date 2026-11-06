@@ -41,6 +41,7 @@ struct Result {
   double retr_pct = 0;
   double cwnd_kb = 0;
   double srtt_ms = 0;
+  double srtt_avg_ms = 0;  // 传输期间 SRTT 的均值：排队时延的直接度量（只打印，不进 CSV）
   bool ok = false;
 };
 
@@ -56,11 +57,12 @@ std::vector<u8> MakeData(std::size_t n, u32 seed) {
 
 // 单次传输
 Result RunOnce(double loss_pct, double bw_mbps, int streams, std::size_t bytes, u64 seed,
-               CcAlgo algo = CcAlgo::kCubic) {
+               CcAlgo algo = CcAlgo::kCubic, u32 delay_us = 1000, u32 queue_us = 5000) {
   LinkParams lp;
   lp.loss_pct = loss_pct;
   lp.bandwidth_mbps = bw_mbps;
-  lp.delay_us = 1000;  // RTT 2ms
+  lp.delay_us = delay_us;  // 默认 RTT 2ms
+  lp.queue_us = queue_us;
   lp.seed = seed;
 
   SimLink link(lp);
@@ -84,6 +86,7 @@ Result RunOnce(double loss_pct, double bw_mbps, int streams, std::size_t bytes, 
   std::vector<u8> pkt;
   Time now = 0;
   double cwnd_sum = 0;
+  double srtt_sum = 0;
   std::size_t cwnd_n = 0;
   Time next_sample = 0;
   // 消费式接收：不消费会被流控挡住。校验改用滚动哈希，避免把上百 MB 数据留在内存里。
@@ -108,6 +111,7 @@ Result RunOnce(double loss_pct, double bw_mbps, int streams, std::size_t bytes, 
 
     if (now >= next_sample) {
       cwnd_sum += a.stats().cwnd_kb;
+      srtt_sum += a.stats().srtt_ms;
       ++cwnd_n;
       next_sample = now + 50'000;  // 每 50ms 采样一次
     }
@@ -127,11 +131,12 @@ Result RunOnce(double loss_pct, double bw_mbps, int streams, std::size_t bytes, 
   r.lost = a.stats().lost;
   r.spurious = a.stats().spurious;
   r.qdrop = link.queue_drops();
-  r.events = a.cc().CongestionEvents();
+  r.events = a.CongestionEvents();
   r.algo = int(algo);
   r.retr_pct = r.sent ? 100.0 * double(r.retr) / double(r.sent) : 0;
   r.cwnd_kb = cwnd_n ? cwnd_sum / double(cwnd_n) : 0;
   r.srtt_ms = a.stats().srtt_ms;
+  r.srtt_avg_ms = cwnd_n ? srtt_sum / double(cwnd_n) : 0;
 
   r.ok = true;
   for (std::size_t i = 0; i < sids.size() && r.ok; ++i) {
@@ -144,9 +149,11 @@ Result RunOnce(double loss_pct, double bw_mbps, int streams, std::size_t bytes, 
 
 // 同配置跑三个种子取中位数，抵消单次随机波动
 Result RunMedian(double loss, double bw, int streams, std::size_t bytes,
-                 CcAlgo algo = CcAlgo::kCubic) {
+                 CcAlgo algo = CcAlgo::kCubic, u32 delay_us = 1000, u32 queue_us = 5000) {
   Result rs[3];
-  for (int i = 0; i < 3; ++i) rs[i] = RunOnce(loss, bw, streams, bytes, u64(11 + i * 7), algo);
+  for (int i = 0; i < 3; ++i) {
+    rs[i] = RunOnce(loss, bw, streams, bytes, u64(11 + i * 7), algo, delay_us, queue_us);
+  }
   std::sort(rs, rs + 3, [](const Result& x, const Result& y) { return x.goodput_mbps < y.goodput_mbps; });
   return rs[1];
 }
@@ -349,6 +356,27 @@ int main(int argc, char** argv) {
     std::printf("%-14.1f %-14.1f %-14.1f %.1f%%\n", lo, rs[3].goodput_mbps, hi,
                 lo > 0 ? 100.0 * (hi - lo) / lo : 0.0);
     all.push_back(rs[3]);
+  }
+
+  // 矩阵 I：BBR vs CUBIC。RTT 换成 40 ms——2 ms 的 BDP 只有几十个包，
+  // 两者的差别（丢包容忍、排队时延）在长 RTT 下才显现。
+  // 缓冲区两档：浅 = 0.5 BDP（20 ms），深 = 10 BDP（400 ms，bufferbloat 场景）。
+  // 平均 SRTT 减去 40 ms 就是平均排队时延。
+  std::printf("\n=== I. BBR vs CUBIC | 50 Mbps | 单流 | 16 MB | RTT 40ms ===\n");
+  std::printf("%-6s %-8s %-6s %-10s %-9s %-9s %-11s %-9s %s\n", "缓冲", "丢包%", "算法", "吞吐Mbps",
+              "利用率%", "重传率%", "平均SRTTms", "cwnd KB", "校验");
+  for (int i = 0; i < 100; ++i) std::putchar('-');
+  std::putchar('\n');
+  for (auto [qname, queue_us] : {std::pair<const char*, u32>{"浅", 20'000}, {"深", 400'000}}) {
+    for (double loss : {0.0, 0.1, 1.0, 2.0}) {
+      for (CcAlgo algo : {CcAlgo::kCubic, CcAlgo::kBbr}) {
+        Result r = RunMedian(loss, 50.0, 1, 16u << 20, algo, 20'000, queue_us);
+        std::printf("%-6s %-8.2f %-6s %-10.1f %-9.1f %-9.2f %-11.1f %-9.1f %s\n", qname, loss,
+                    CcAlgoName(algo), r.goodput_mbps, r.util_pct, r.retr_pct, r.srtt_avg_ms,
+                    r.cwnd_kb, r.ok ? "OK" : "FAIL");
+        all.push_back(r);
+      }
+    }
   }
 
   if (!csv_path.empty()) {
