@@ -106,6 +106,10 @@ int main(int argc, char** argv) {
     tcfg.cc.algo = CcAlgo::kReno;
   } else if (algo == "bbr") {
     tcfg.cc.algo = CcAlgo::kBbr;
+  } else if (algo == "bbr2") {
+    tcfg.cc.algo = CcAlgo::kBbr2;
+  } else if (algo == "bbr3") {
+    tcfg.cc.algo = CcAlgo::kBbr3;
   } else if (algo == "cubic") {
     tcfg.cc.algo = CcAlgo::kCubic;
   } else {
@@ -177,7 +181,19 @@ int main(int argc, char** argv) {
       next_sample = now + sc->sample_us;
       const CubicCc& cc = a.cc();
       const bool bbr = a.UsingBbr();
-      if (f != nullptr && bbr) {
+      if (f != nullptr && a.UsingBbr3()) {
+        // v2/v3：target_kb 列填 BDP，w_max_kb 列填 inflight_hi（无上界时填 0），phase 填 Bbr3State
+        const Bbr3Cc& bb = a.bbr3();
+        const double hi = bb.InflightHi() == Bbr3Cc::kInf ? 0.0 : Kb(bb.InflightHi());
+        std::fprintf(f, "%.3f,%.2f,0,%.2f,%.2f,%.3f,%.2f,%d,%llu,%.2f,0,0,%zu,%llu,%llu,"
+                        "%.2f,%.1f,%.3f,0\n",
+                     double(now) / 1000.0, Kb(bb.cwnd()), Kb(bb.BdpBytes()), Kb(a.InFlight()),
+                     double(a.SrttUs()) / 1000.0, double(a.PacingRateBps()) * 8.0 / 1e6,
+                     int(bb.state()), (unsigned long long)bb.RoundCount(), hi,
+                     link.queue_depth(2, now), (unsigned long long)a.stats().retransmits,
+                     (unsigned long long)a.stats().lost, Kb(b.DeliveredBytes()), sc->bw_mbps,
+                     2.0 * double(sc->delay_us) / 1000.0);
+      } else if (f != nullptr && bbr) {
         const BbrCc& bb = a.bbr();
         std::fprintf(f, "%.3f,%.2f,0,%.2f,%.2f,%.3f,%.2f,%d,%llu,0,0,0,%zu,%llu,%llu,"
                         "%.2f,%.1f,%.3f,0\n",
@@ -233,6 +249,19 @@ int main(int argc, char** argv) {
               (unsigned long long)link.queue_drops());
   std::printf("  最终 cwnd         %.1f KB  (BDP 的 %.0f%%)\n", Kb(a.Cwnd()),
               bw_bdp_kb > 0 ? 100.0 * Kb(a.Cwnd()) / bw_bdp_kb : 0.0);
+  if (a.UsingBbr3()) {
+    const Bbr3Cc& bb = a.bbr3();
+    std::printf("  BBRv%d 状态        %s · bw %.1f Mbps · RTprop %.2f ms · inflight_hi %s · "
+                "探测 %llu 次 · 过高 %llu 次 · ProbeRTT %llu 次%s\n",
+                bb.version(), Bbr3StateName(bb.state()), double(bb.BwBps()) * 8.0 / 1e6,
+                double(bb.MinRttUs()) / 1000.0,
+                bb.InflightHi() == Bbr3Cc::kInf
+                    ? "inf"
+                    : (std::to_string(bb.InflightHi() / 1024) + " KB").c_str(),
+                (unsigned long long)bb.BwProbes(), (unsigned long long)bb.InflightTooHighEvents(),
+                (unsigned long long)bb.ProbeRttCount(),
+                bb.StartupExitedOnLoss() ? " · Startup 因丢包退出" : "");
+  }
   if (a.UsingBbr()) {
     const BbrCc& bb = a.bbr();
     std::printf("  BBR 状态          %s · BtlBw %.1f Mbps · RTprop %.2f ms · ProbeRTT %llu 次\n",

@@ -22,7 +22,7 @@ fi
 echo "编译器: $CXX"
 mkdir -p build/traces
 
-SRC="src/batch_io.cpp src/bbr.cpp src/crc32c.cpp src/cc.cpp src/packet.cpp src/sim.cpp src/transport.cpp src/udp.cpp"
+SRC="src/batch_io.cpp src/bbr.cpp src/bbr3.cpp src/crc32c.cpp src/cc.cpp src/packet.cpp src/sim.cpp src/transport.cpp src/udp.cpp"
 
 # Windows 上 socket API 在 ws2_32 里，必须显式链接；POSIX 上不需要额外库
 EXTRA=""
@@ -32,7 +32,7 @@ esac
 FLAGS="-std=c++20 -O2 -Iinclude"
 
 # shellcheck disable=SC2086
-$CXX $FLAGS $SRC tests/test_main.cpp tests/test_wire.cpp tests/test_cc.cpp tests/test_transport.cpp tests/test_batch_io.cpp tests/test_rate_sample.cpp tests/test_bbr.cpp -o build/xport_tests $EXTRA
+$CXX $FLAGS $SRC tests/test_main.cpp tests/test_wire.cpp tests/test_cc.cpp tests/test_transport.cpp tests/test_batch_io.cpp tests/test_rate_sample.cpp tests/test_bbr.cpp tests/test_bbr3.cpp -o build/xport_tests $EXTRA
 # shellcheck disable=SC2086
 $CXX $FLAGS $SRC apps/xport_demo.cpp -o build/xport_demo $EXTRA
 # shellcheck disable=SC2086
@@ -43,6 +43,7 @@ $CXX $FLAGS $SRC apps/xport_bench.cpp -o build/xport_bench $EXTRA
 $CXX $FLAGS $SRC apps/xport_ccprobe.cpp -o build/xport_ccprobe $EXTRA
 $CXX $FLAGS $SRC apps/xport_cpubench.cpp -o build/xport_cpubench $EXTRA
 $CXX $FLAGS $SRC apps/xport_udp_bench.cpp -o build/xport_udp_bench $EXTRA
+$CXX $FLAGS $SRC apps/xport_ccexp.cpp -o build/xport_ccexp $EXTRA
 
 echo
 ./build/xport_tests

@@ -24,6 +24,8 @@ enum class CcAlgo : u8 {
   kCubic = 0,
   kReno = 1,  // 对照组：AIMD，用于证明 CUBIC 在高 BDP 下的收益
   kBbr = 2,   // BBR v1，见 bbr.h。由 transport 分派到 BbrCc，CubicCc 不处理这个值
+  kBbr2 = 3,  // BBR v2（Linux v2alpha 参数），见 bbr3.h
+  kBbr3 = 4,  // BBR v3（draft-ietf-ccwg-bbr-06），见 bbr3.h
 };
 
 const char* CcPhaseName(CcPhase p);
@@ -51,6 +53,11 @@ struct CcConfig {
   double pacing_gain_ss = 2.0;
   double pacing_gain_ca = 1.25;
   double pacing_burst_pkts = 8.0;
+
+  // BBR 的随机化种子（ProbeBW 起始相位 / 探测等待时间）。0 = 用内置常数。
+  // 多流实验里每条流要给不同的值：同一种子的流会同步探测、同时撞满队列，
+  // 公平性和收敛速度都会被这个人为的同步扭曲。
+  u32 rng_seed = 0;
 };
 
 class CubicCc {

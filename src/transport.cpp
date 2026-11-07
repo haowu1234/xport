@@ -7,6 +7,12 @@
 namespace xport {
 namespace {
 
+std::unique_ptr<Bbr3Cc> MakeBbr3(const CcConfig& cc) {
+  if (cc.algo == CcAlgo::kBbr2) return std::make_unique<Bbr3Cc>(cc, Bbr3Params::V2());
+  if (cc.algo == CcAlgo::kBbr3) return std::make_unique<Bbr3Cc>(cc, Bbr3Params::V3());
+  return nullptr;
+}
+
 // 一个满帧留给 STREAM 帧头的余量（type + sid + offset + len + fin 的最大编码长度）
 constexpr std::size_t kMaxStreamPayload = kMaxPayload - 32;
 // 聚合时保守估计的帧头开销，用来决定"这个包还能不能再塞一段"
@@ -21,6 +27,8 @@ Transport::Transport(SimLink& link, u32 self, u32 peer, const TransportConfig& c
       cc_(cfg.cc),
       bbr_(cfg.cc.algo == CcAlgo::kBbr ? std::make_unique<BbrCc>(cfg.cc) : nullptr),
       use_bbr_(bbr_ != nullptr),
+      bbr3_(MakeBbr3(cfg.cc)),
+      use_bbr3_(bbr3_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -32,6 +40,8 @@ Transport::Transport(IoEndpoint& io, const TransportConfig& cfg)
       cc_(cfg.cc),
       bbr_(cfg.cc.algo == CcAlgo::kBbr ? std::make_unique<BbrCc>(cfg.cc) : nullptr),
       use_bbr_(bbr_ != nullptr),
+      bbr3_(MakeBbr3(cfg.cc)),
+      use_bbr3_(bbr3_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -113,6 +123,7 @@ void Transport::Tick(Time now) {
 
 u64 Transport::PacingRateBps() const {
   // CUBIC 由 cwnd/SRTT 推出速率；BBR 直接给出 pacing_gain × BtlBw
+  if (use_bbr3_) return bbr3_->PacingRateBps();
   return use_bbr_ ? bbr_->PacingRateBps() : cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000);
 }
 
@@ -217,7 +228,7 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
 
   cc_.OnPacketSent(h.pkt_num);
   // 速率采样：在 inflight 增长之前拍快照，拍完再增长——快照记录的是"发出本包时"的状态
-  const RateSnapshot snap = sampler_.OnPacketSent(now, inflight_);
+  const RateSnapshot snap = sampler_.OnPacketSent(now, inflight_, bytes);
   // 发送失败不是异常，而是又一个丢包源：登记在途，交给丢包检测 / PTO 重传。
   // 但必须计数——静默的本地丢弃和链路丢包在现象上一模一样，没有计数器就查不出来。
   if (!io_.SendQueued(Bytes(buf, hn + plen), now)) ++stats_.send_fail;
@@ -441,7 +452,9 @@ void Transport::SendData(Time now) {
   }
   // ProbeRTT 主动把在途压到 4 包，这期间的低速样本同样不代表网络变慢（Linux 进入
   // ProbeRTT 时也会置 app_limited），否则 10 轮窗口里会混进几个很低的值
-  if (use_bbr_ && bbr_->InProbeRtt()) sampler_.OnAppLimited(inflight_);
+  if ((use_bbr_ && bbr_->InProbeRtt()) || (use_bbr3_ && bbr3_->InProbeRtt())) {
+    sampler_.OnAppLimited(inflight_);
+  }
 }
 
 void Transport::OnPacket(Bytes pkt, Time now) {
@@ -663,7 +676,7 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   }
   // 有新包被确认，说明路径通了：退避清零（RFC 9002 §6.2.1）
   if (newly_acked) pto_count_ = 0;
-  if (!use_bbr_) {
+  if (!use_bbr_ && !use_bbr3_) {
     // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
     cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
               has_rtt_ ? u64(srtt_us_) : 0, sample, cwnd_limited);
@@ -681,7 +694,7 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   // 确认量和丢失量（包守恒、ProbeBW 探测相的退出条件都依赖两者），而 OnCongestion
   // 只是登记恢复期，真正的窗口调整发生在随后的 OnAck 里。
   const u64 lost_bytes = DetectLoss(now);
-  last_rate_sample_ = sampler_.Finish(bbr_->MinRttUs());
+  last_rate_sample_ = sampler_.Finish(use_bbr3_ ? bbr3_->MinRttUs() : bbr_->MinRttUs());
 
   BbrAck ba;
   ba.now = now;
@@ -694,7 +707,13 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   ba.has_newest_acked = newly_acked;
   ba.newest_acked_sent_t = newest_sent_t;
   ba.rs = last_rate_sample_;
-  bbr_->OnAck(ba);
+  // 窗口是否被用满：按 BBR 自己的 cwnd 判（上面的 cwnd_limited 是按 CUBIC 的窗口算的）
+  ba.cwnd_limited = prior_inflight + kMaxStreamPayload >= Cwnd();
+  if (use_bbr3_) {
+    bbr3_->OnAck(ba);
+  } else {
+    bbr_->OnAck(ba);
+  }
 }
 
 // 丢包检测：两条 RFC 9002 规则，都改成"只走近真正需要检查的包号"。
@@ -720,6 +739,11 @@ u64 Transport::DetectLoss(Time now) {
       pc_any = true;
     }
     lost_bytes += s.bytes;
+    sampler_.OnPacketLost(s.bytes);
+    // v2/v3 逐包判断探测是否越过 2% 丢包率（必须在 OnCongestion 之前，见 bbr3.h）
+    if (use_bbr3_) {
+      bbr3_->OnPacketLost(s.LoadRate(), s.bytes, sampler_.lost(), sampler_.delivered(), now);
+    }
     const u32 n = s.seg_count;
     Seg segs[kMaxSegsPerPacket];
     for (u32 i = 0; i < n; ++i) segs[i] = s.segs[i];
@@ -760,7 +784,9 @@ u64 Transport::DetectLoss(Time now) {
   }
 
   if (congested) {
-    if (use_bbr_) {
+    if (use_bbr3_) {
+      bbr3_->OnCongestion(now);
+    } else if (use_bbr_) {
       bbr_->OnCongestion(now);
     } else {
       cc_.OnCongestion(now);
@@ -782,7 +808,9 @@ u64 Transport::DetectLoss(Time now) {
       }
     }
     if (!gap_acked) {
-      if (use_bbr_) {
+      if (use_bbr3_) {
+        bbr3_->OnPersistentCongestion(now);
+      } else if (use_bbr_) {
         bbr_->OnPersistentCongestion(now);
       } else {
         cc_.OnPersistentCongestion(now);

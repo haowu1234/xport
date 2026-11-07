@@ -66,6 +66,8 @@ struct BbrAck {
   Time rtt_us = 0;         // 本次 RTT 样本，0 表示没有
   bool has_newest_acked = false;
   Time newest_acked_sent_t = 0;  // 本次确认的包里最晚发出的那个的发送时刻（判定退出恢复期）
+  // 处理本 ACK 之前窗口是否被用满（v2/v3 只在被窗口卡住时才抬高 inflight_hi；v1 不用）
+  bool cwnd_limited = false;
   RateSample rs;
 };
 

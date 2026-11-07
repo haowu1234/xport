@@ -26,6 +26,10 @@ const char* CcAlgoName(CcAlgo a) {
       return "reno";
     case CcAlgo::kBbr:
       return "bbr";
+    case CcAlgo::kBbr2:
+      return "bbr2";
+    case CcAlgo::kBbr3:
+      return "bbr3";
   }
   return "?";
 }

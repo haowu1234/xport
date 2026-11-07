@@ -12,3 +12,6 @@ target_link_libraries(xport_cpubench PRIVATE xport)
 
 add_executable(xport_udp_bench xport_udp_bench.cpp)
 target_link_libraries(xport_udp_bench PRIVATE xport)
+
+add_executable(xport_ccexp xport_ccexp.cpp)
+target_link_libraries(xport_ccexp PRIVATE xport)

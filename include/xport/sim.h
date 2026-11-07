@@ -42,6 +42,12 @@ class SimLink {
   explicit SimLink(const LinkParams& p);
 
   void Send(u32 from, u32 to, Bytes pkt, Time now);
+
+  // 多流共享瓶颈（公平性实验用）：把多个目的端归到同一个出口组，它们共用一条串行化
+  // 时间线和一个缓冲区——相当于哑铃拓扑中间那条瓶颈链路。默认每个目的端自成一组。
+  void SetBottleneckGroup(u32 to, u32 group);
+  // 目的端额外的单程传播时延（加在排队之后）。用来构造不同 RTT 的流，测 RTT 公平性。
+  void SetExtraDelay(u32 to, Time us);
   // 取出一个在 now 时刻已到达 to 的包；没有则返回 false
   bool Poll(u32 to, std::vector<u8>* out, Time now);
 
@@ -52,6 +58,8 @@ class SimLink {
   std::size_t in_flight() const;
   // 目的端出口队列当前积压包数（画"排队延迟 vs cwnd"图用）
   std::size_t queue_depth(u32 to, Time now) const;
+  // 目的端所在出口组当前的排队时延（还没串行化完的积压，微秒）：新到的包要等这么久
+  Time backlog_us(u32 to, Time now) const;
 
  private:
   struct Item {
@@ -74,7 +82,17 @@ class SimLink {
   u64 window_drops_ = 0;
   u64 delivered_ = 0;
   std::map<u32, Queue> queues_;
-  std::map<u32, Time> busy_until_;  // 每个方向的串行化占用（模拟出口带宽）
+  std::map<u32, Time> busy_until_;  // 每个出口组的串行化占用（模拟出口带宽）
+  // 只有调用过上面两个设置函数才会去查表：默认路径保持零额外开销，
+  // 否则 cpubench 里含仿真链路的发送路径数字会被这两次 map 查找污染。
+  bool custom_ = false;
+  std::map<u32, u32> group_;
+  std::map<u32, Time> extra_delay_;
+  u32 GroupOf(u32 to) const {
+    if (!custom_) return to;
+    auto it = group_.find(to);
+    return it == group_.end() ? to : it->second;
+  }
 };
 
 // 把 SimLink 适配成 IoEndpoint：同一份 transport 代码既能跑仿真也能跑真实 socket。
