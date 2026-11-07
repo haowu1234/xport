@@ -481,3 +481,92 @@ TEST(PersistentCongestionCollapsesCwnd) {
   CHECK(done > 0);
   CHECK(r.Got(sid) == data);
 }
+
+// 发送缓冲按确认释放。旧实现 Write 只往一个 vector 追加、从不截断，长连接写了多少就占多少内存。
+// 这里边发边写 64 MB（发送端只领先 1 MB），结束时占用的应当只有在途 + 未发的那一点，
+// 而且逐字节交付不受影响——释放错了块，重传会读到别的数据，比对必然失败。
+TEST(SendBufferReleasedAsDataIsAcked) {
+  LinkParams p;
+  p.bandwidth_mbps = 400.0;
+  p.delay_us = 2'000;
+  p.loss_pct = 0.5;  // 有重传：确认前缀会出现空洞，释放必须等空洞补上
+  p.seed = 5;
+  TransportConfig cfg;
+  cfg.initial_max_data = 8ull << 20;
+  cfg.recv_window_bytes = 8ull << 20;
+  Rig r(p, cfg);
+  const u32 sid = r.a.OpenStream();
+  const std::size_t kTotal = 64u << 20, kStep = 1u << 20;
+  std::vector<u8> chunk(kStep);
+  u64 written = 0, x = 12345;
+  std::size_t peak = 0;
+  std::vector<u8> expect_tail;  // 只保留最后一块的期望内容，其余用滚动哈希比
+  u64 want_hash = 1469598103934665603ull, got_hash = 1469598103934665603ull;
+  std::size_t got_len = 0;
+  std::vector<u8> pkt;
+  bool done = false;
+  for (Time now = 0; now < 30'000'000 && !done; now += 50) {
+    if (written < kTotal && written - r.a.StreamSentBytes(sid) < kStep) {
+      for (auto& b : chunk) {
+        x = x * 6364136223846793005ull + 1442695040888963407ull;
+        b = u8(x >> 56);
+        want_hash = (want_hash ^ b) * 1099511628211ull;
+      }
+      r.a.Write(sid, Bytes(chunk));
+      written += kStep;
+    }
+    r.a.Tick(now);
+    r.b.Tick(now);
+    while (r.link.Poll(1, &pkt, now)) r.a.OnPacket(Bytes(pkt), now);
+    while (r.link.Poll(2, &pkt, now)) r.b.OnPacket(Bytes(pkt), now);
+    for (Bytes v = r.b.Peek(sid); !v.empty(); v = r.b.Peek(sid)) {
+      for (u8 b : v) got_hash = (got_hash ^ b) * 1099511628211ull;
+      got_len += v.size();
+      r.b.Consume(sid, v.size());
+    }
+    peak = std::max(peak, r.a.SendBufferBytes());
+    done = written == kTotal && r.a.SendComplete() && got_len == kTotal;
+  }
+  std::printf("    wrote %zu MB, send buffer peak %.2f MB, final %.2f MB\n", kTotal >> 20,
+              double(peak) / 1048576.0, double(r.a.SendBufferBytes()) / 1048576.0);
+  CHECK(done);
+  CHECK(got_hash == want_hash);
+  CHECK(peak < (8u << 20));                     // 远小于 64 MB：受流控窗口 + 1 MB 领先量约束
+  CHECK(r.a.SendBufferBytes() <= (128u << 10));  // 全部确认后最多剩两块（当前写入块 + 对齐余量）
+}
+
+// 1 Gbps × 100 ms 的 BDP 是 12.5 MB（约 9100 包）。旧实现的在途包表固定 8192 槽、
+// 默认 max_cwnd 8 MB，在途被卡在 8 MB 左右，吞吐上不去（约 8 MB / 100 ms ≈ 670 Mbps）。
+TEST(LargeBdpPathNotCappedByInflightTable) {
+  LinkParams p;
+  p.bandwidth_mbps = 1000.0;
+  p.delay_us = 50'000;
+  p.queue_us = 100'000;  // 1 BDP
+  TransportConfig cfg;
+  cfg.cc.algo = CcAlgo::kBbr;  // Startup 几个 RTT 就能把在途推到 2 × BDP，测得快
+  cfg.initial_max_data = 256ull << 20;
+  cfg.recv_window_bytes = 64ull << 20;
+  Rig r(p, cfg);
+  const u32 sid = r.a.OpenStream();
+  std::vector<u8> chunk(4u << 20, 0x6b);
+  u64 written = 0, max_inflight = 0, at_2s = 0;
+  std::vector<u8> pkt;
+  for (Time now = 0; now < 4'000'000; now += 10) {
+    if (written - r.a.StreamSentBytes(sid) < chunk.size()) {
+      r.a.Write(sid, Bytes(chunk));
+      written += chunk.size();
+    }
+    r.a.Tick(now);
+    r.b.Tick(now);
+    while (r.link.Poll(1, &pkt, now)) r.a.OnPacket(Bytes(pkt), now);
+    while (r.link.Poll(2, &pkt, now)) r.b.OnPacket(Bytes(pkt), now);
+    for (Bytes v = r.b.Peek(sid); !v.empty(); v = r.b.Peek(sid)) r.b.Consume(sid, v.size());
+    max_inflight = std::max<u64>(max_inflight, r.a.InFlight());
+    if (now == 2'000'000) at_2s = r.b.DeliveredBytes();
+  }
+  const double mbps = double(r.b.DeliveredBytes() - at_2s) * 8.0 / 2e6;
+  std::printf("    max inflight %.1f MB, goodput 2-4 s %.0f Mbps\n",
+              double(max_inflight) / 1048576.0, mbps);
+  CHECK(max_inflight > (12u << 20));
+  CHECK(mbps > 900.0);
+}

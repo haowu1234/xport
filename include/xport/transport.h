@@ -28,6 +28,7 @@
 #include "xport/packet.h"
 #include "xport/ranges.h"
 #include "xport/rate_sample.h"
+#include "xport/send_buffer.h"
 #include "xport/sim.h"
 #include "xport/types.h"
 
@@ -53,6 +54,10 @@ struct TransportConfig {
   // 对端一个 sid 很大的包就能让本端 resize 出 GB 级的流表。越界帧丢弃并计 stream_limit。
   // 最坏内存 ≈ max_streams × recv_window（每流环形缓冲在首个字节到达时分配）。
   u32 max_streams = 256;
+  // 在途包表（按包号索引的环形数组）的容量上限，按 2 的幂向下取整，最小 8192。
+  // 表从 8192 槽起步，包号跨度不够时翻倍扩容。它限制的是"同时未确认的包号跨度"，
+  // 默认 131072 包 ≈ 179 MB 在途数据，覆盖 10 Gbps × 100 ms；扩满时表本身约 22 MB。
+  u32 max_inflight_packets = 1u << 17;
   CcConfig cc;
 };
 
@@ -127,15 +132,17 @@ class Transport {
   u64 StreamSentBytes(u32 sid) const;
   std::size_t StreamCount() const { return out_.size(); }
   std::size_t InFlightPackets() const { return inflight_pkts_; }
+  // 发送缓冲实际占用的内存（所有流合计，按 64 KB 块计）
+  std::size_t SendBufferBytes() const;
+  std::size_t SentRingCapacity() const { return sent_ring_.size(); }
 
  private:
   // 一个包内最多携带多少段数据（可跨流）。上限决定了环形数组元素的体积：
-  // 8 段 × 16 B + 头部 ≈ 152 B，8192 槽 = 1.2 MB，单连接可接受。
+  // 8 段 × 16 B + 头部 ≈ 168 B，初始 8192 槽 ≈ 1.4 MB。
   static constexpr u32 kMaxSegsPerPacket = 8;
-  // 在途包环形数组容量，必须是 2 的幂。它同时是"窗口能开到多大"的硬上限：
-  // 8192 包 × 1368 B ≈ 11 MB，覆盖 100 Gbps × 1 ms 的 BDP。
-  static constexpr std::size_t kSentRing = 8192;
-  static constexpr std::size_t kSentMask = kSentRing - 1;
+  // 在途包环形数组的初始容量（2 的幂）。以前它是固定的硬上限：8192 包 × 1368 B ≈ 11 MB，
+  // 1 Gbps × 100 ms 的 BDP（12.5 MB）就装不下。现在按需翻倍，上限见 max_inflight_packets。
+  static constexpr std::size_t kSentRingInit = 8192;
   // 接收包号位图容量（位）。同时决定 ACK 能描述多长的历史。
   static constexpr std::size_t kRecvBits = 16384;
   static constexpr std::size_t kRecvWords = kRecvBits / 64;
@@ -183,7 +190,8 @@ class Transport {
     }
   };
   struct OutStream {
-    std::vector<u8> data;   // 用户已提交的全部字节
+    // 用户已提交、尚未被确认释放的字节。偏移是流内绝对偏移，低于 data.base() 的已释放
+    SendBuffer data;
     u64 next_off = 0;       // 下一个待发送偏移
     // 已确认的 offset 区间，与接收端的重组结构对称。
     // 注意：不能用单一 watermark 代替——重传换新包号，包号连续性不代表字节连续性。
@@ -202,8 +210,20 @@ class Transport {
   };
 
   // 环形数组访问
-  Sent& Slot(u64 pn) { return sent_ring_[std::size_t(pn) & kSentMask]; }
-  const Sent& Slot(u64 pn) const { return sent_ring_[std::size_t(pn) & kSentMask]; }
+  Sent& Slot(u64 pn) { return sent_ring_[std::size_t(pn) & sent_mask_]; }
+  const Sent& Slot(u64 pn) const { return sent_ring_[std::size_t(pn) & sent_mask_]; }
+  // 保证接下来至少还能登记 kSentSlack 个包而不覆盖在用的槽。SendData 每轮检查一次，
+  // 一轮最多发 2 个包（重传前先 flush 拼好的包，或聚合时满 8 段再 flush），循环退出后
+  // 收尾的 flush 还可能再发 1 个，所以留 3 个。
+  // 判据是包号跨度而不是在途包数：最老的包迟迟未确认时，新包号会绕回到它的槽位上。
+  // 跨度不够时先推进 oldest_pn_，仍不够就扩容；扩到上限仍不够返回 false。
+  static constexpr u64 kSentSlack = 3;
+  bool HasSentRoom() {
+    if (next_pn_ + kSentSlack - oldest_pn_ <= sent_ring_.size()) return true;
+    return MakeSentRoom();
+  }
+  bool MakeSentRoom();
+  void GrowSentRing();
   bool InUse(u64 pn) const {
     const Sent& s = Slot(pn);
     return s.used && s.pn == pn;
@@ -266,6 +286,8 @@ class Transport {
 
   // 在途包：按包号索引的环形数组 + 惰性推进的最老包号游标
   std::vector<Sent> sent_ring_;
+  std::size_t sent_mask_ = 0;
+  std::size_t sent_ring_max_ = 0;
   u64 next_pn_ = 0;
   u64 oldest_pn_ = 0;         // 最小的可能仍在途的包号（惰性推进）
   std::size_t inflight_pkts_ = 0;
