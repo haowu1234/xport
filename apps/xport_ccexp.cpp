@@ -54,6 +54,10 @@ struct RunSpec {
   Time duration_us = 20'000'000;
   Time measure_from_us = 5'000'000;
   Time ts_interval_us = 0;  // >0 时记录时间序列
+  // 复刻外部实验时用：覆盖默认的链路速率 / 基础单程时延 / 缓冲（queue_us > 0 时忽略 buf_bdp）
+  double bw_mbps = kBwMbps;
+  u32 one_way_us = kBaseOneWayUs;
+  u32 queue_us = 0;
 };
 
 struct FlowResult {
@@ -75,6 +79,7 @@ struct RunResult {
   double q_avg_ms = 0, q_p50_ms = 0, q_p95_ms = 0, q_p99_ms = 0;
   double retx_pct = 0;
   double jain = 0;
+  double srtt_p50_ms = 0;  // 所有流 SRTT 每 1 ms 采样一次的中位数（Google IETF 105 的时延口径）
   std::vector<TsPoint> ts;
 };
 
@@ -107,12 +112,14 @@ struct Flow {
 };
 
 RunResult Run(const RunSpec& rs) {
-  const double bdp_bytes = kBwMbps * 1e6 / 8.0 * (2.0 * kBaseOneWayUs / 1e6);
+  const double bdp_bytes = rs.bw_mbps * 1e6 / 8.0 * (2.0 * rs.one_way_us / 1e6);
   LinkParams lp;
-  lp.bandwidth_mbps = kBwMbps;
-  lp.delay_us = kBaseOneWayUs;
-  // 缓冲按时间计（SimLink 的约定）：k × BDP 字节 = k × 基础 RTT 的串行化时间
-  lp.queue_us = u32(rs.buf_bdp * bdp_bytes * 8.0 / kBwMbps);
+  lp.bandwidth_mbps = rs.bw_mbps;
+  lp.delay_us = rs.one_way_us;
+  // 缓冲按时间计（SimLink 的约定）：k × BDP 字节 = k × 基础 RTT 的串行化时间。
+  // 下限一个 MTU 的串行化时间，否则极浅缓冲（0.02 BDP）会连单个包都放不进
+  lp.queue_us = rs.queue_us ? rs.queue_us : u32(rs.buf_bdp * bdp_bytes * 8.0 / rs.bw_mbps);
+  lp.queue_us = std::max<u32>(lp.queue_us, u32(double(kMtu) * 8.0 / rs.bw_mbps) + 1);
   lp.loss_pct = rs.loss_pct;
   lp.seed = rs.seed;
   SimLink link(lp);
@@ -138,6 +145,7 @@ RunResult Run(const RunSpec& rs) {
   static const std::vector<u8> kChunk(1u << 20, 0x5a);
   std::vector<u8> pkt;
   std::vector<double> qdelay;
+  std::vector<double> srtts;
   qdelay.reserve(std::size_t(rs.duration_us / 1000));
   RunResult out;
   out.flows.resize(n);
@@ -176,6 +184,9 @@ RunResult Run(const RunSpec& rs) {
     if (measuring && now >= next_q) {
       next_q = now + 1000;
       qdelay.push_back(double(link.backlog_us(101, now)) / 1000.0);
+      for (auto& f : flows) {
+        if (f.tx->SrttUs() > 0) srtts.push_back(double(f.tx->SrttUs()) / 1000.0);
+      }
     }
     if (rs.ts_interval_us > 0 && now >= next_ts) {
       TsPoint p;
@@ -215,6 +226,7 @@ RunResult Run(const RunSpec& rs) {
   out.q_p50_ms = Percentile(qdelay, 0.50);
   out.q_p95_ms = Percentile(qdelay, 0.95);
   out.q_p99_ms = Percentile(qdelay, 0.99);
+  out.srtt_p50_ms = Percentile(srtts, 0.50);
   return out;
 }
 
@@ -386,6 +398,151 @@ void ExpRtt(const std::string& dir) {
   std::fclose(f);
 }
 
+// ---- 6. 复刻已发表的实验配置（与 Google / MPI / KIT 的结果对照用）----
+//
+// 每组都按原文的拓扑参数搭，原文参数超出仿真器能力的地方按比例缩小并在 CSV 的
+// note 列注明。来源见 docs/bbr-report.md 的"与已发表结果对照"一节。
+void WriteRep(FILE* f, const char* exp, CcAlgo algo, const std::string& param, int seed,
+              const RunResult& r, const std::string& note) {
+  std::fprintf(f, "%s,%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%s\n", exp, CcAlgoName(algo),
+               param.c_str(), seed, r.flows[0].goodput_mbps, r.total_mbps, r.retx_pct, r.q_avg_ms,
+               r.q_p95_ms, r.srtt_p50_ms, r.jain, note.c_str());
+}
+
+void ExpReplica(const std::string& dir, const std::string& which) {
+  const std::string fname = "rep_" + which + ".csv";
+  FILE* f = Open(dir, fname.c_str());
+  if (!f) return;
+  std::fprintf(f, "exp,algo,param,seed,flow0_mbps,total_mbps,retx_pct,q_avg_ms,q_p95_ms,"
+                  "srtt_p50_ms,jain,note\n");
+  const auto mb = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%g", v); return std::string(b); };
+
+  if (which == "loss") {
+    // Google IETF 105 p6：1 Gbps / min_rtt 100 ms / 1 BDP / 2 min。
+    // 1 Gbps × 100 ms 的 BDP（12.5 MB）超过发送环（8192 包 ≈ 11 MB），按 50 Mbps 缩放，RTT 与缓冲倍数不变
+    for (CcAlgo algo : kAlgos) {
+      for (double loss : {0.001, 0.01, 0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0}) {
+        for (int s = 0; s < 3; ++s) {
+          RunSpec sp;
+          sp.flows = {FlowSpec{algo, 0, 0}};
+          sp.bw_mbps = 50.0;
+          sp.one_way_us = 50'000;
+          sp.buf_bdp = 1.0;
+          sp.loss_pct = loss;
+          sp.seed = u64(1 + s);
+          sp.duration_us = 60'000'000;
+          sp.measure_from_us = 10'000'000;
+          WriteRep(f, "g105_loss", algo, mb(loss), s, Run(sp), "bw scaled 1000->50 Mbps");
+        }
+        std::printf("rep loss %s %.3f done\n", CcAlgoName(algo), loss);
+        std::fflush(stdout);
+      }
+    }
+  } else if (which == "qdelay") {
+    // Google IETF 105 p7：2 条同算法流，第 2 条 t=2 s 启动，50 Mbps / 30 ms，缓冲 {1,10,100} BDP，2 min，p50 srtt。
+    // 100 BDP（18.75 MB）超过 CUBIC 默认 max_cwnd 8 MB 和发送环容量，只跑 1 与 10 BDP
+    for (CcAlgo algo : kAlgos) {
+      for (double buf : {1.0, 10.0}) {
+        for (int s = 0; s < 3; ++s) {
+          RunSpec sp;
+          sp.flows = {FlowSpec{algo, 0, 0}, FlowSpec{algo, 2'000'000, 0}};
+          sp.bw_mbps = 50.0;
+          sp.one_way_us = 15'000;
+          sp.buf_bdp = buf;
+          sp.seed = u64(1 + s);
+          sp.duration_us = 120'000'000;
+          sp.measure_from_us = 2'000'000;
+          WriteRep(f, "g105_qdelay", algo, mb(buf), s, Run(sp), "");
+        }
+        std::printf("rep qdelay %s %.0f done\n", CcAlgoName(algo), buf);
+        std::fflush(stdout);
+      }
+    }
+  } else if (which == "coexist") {
+    // Google IETF 105 p10：CUBIC t=0、X t=2 s，50 Mbps / 30 ms，缓冲 {0.1,1,2,4,8,16} BDP，3 min
+    for (CcAlgo algo : {CcAlgo::kBbr, CcAlgo::kBbr2, CcAlgo::kBbr3}) {
+      for (double buf : {0.1, 1.0, 2.0, 4.0, 8.0, 16.0}) {
+        for (int s = 0; s < 3; ++s) {
+          RunSpec sp;
+          sp.flows = {FlowSpec{algo, 2'000'000, 0}, FlowSpec{CcAlgo::kCubic, 0, 0}};
+          sp.bw_mbps = 50.0;
+          sp.one_way_us = 15'000;
+          sp.buf_bdp = buf;
+          sp.seed = u64(1 + s);
+          sp.duration_us = 180'000'000;
+          sp.measure_from_us = 2'000'000;
+          WriteRep(f, "g105_coexist", algo, mb(buf), s, Run(sp), "");
+        }
+        std::printf("rep coexist %s %.1f done\n", CcAlgoName(algo), buf);
+        std::fflush(stdout);
+      }
+    }
+  } else if (which == "retx") {
+    // Google IETF 105 p11：N 条同算法流，1 Gbps / 100 ms / 0.02 BDP，5 min，重传率。
+    // 按 50 Mbps 缩放（0.02 BDP = 12.5 KB ≈ 9 包），N ∈ {1, 10}，60 s
+    for (CcAlgo algo : kAlgos) {
+      for (int n : {1, 10}) {
+        for (int s = 0; s < 3; ++s) {
+          RunSpec sp;
+          for (int i = 0; i < n; ++i) sp.flows.push_back(FlowSpec{algo, 0, 0});
+          sp.bw_mbps = 50.0;
+          sp.one_way_us = 50'000;
+          sp.buf_bdp = 0.02;
+          sp.seed = u64(1 + s);
+          sp.duration_us = 60'000'000;
+          sp.measure_from_us = 5'000'000;
+          WriteRep(f, "g105_retx", algo, std::to_string(n), s, Run(sp), "bw scaled 1000->50 Mbps");
+        }
+        std::printf("rep retx %s n=%d done\n", CcAlgoName(algo), n);
+        std::fflush(stdout);
+      }
+    }
+  } else if (which == "rtt") {
+    // MPI IETF 121 p37：2 条同算法流，RTT 160 对 10 ms、160 对 80 ms，100 Mbps，缓冲 2 BDP。
+    // 原文没写 BDP 按哪条流的 RTT 算，这里两种都跑（ref=short / ref=long）
+    for (CcAlgo algo : kAlgos) {
+      for (int pair : {10, 80}) {
+        for (int ref_long : {0, 1}) {
+          for (int s = 0; s < 3; ++s) {
+            RunSpec sp;
+            sp.bw_mbps = 100.0;
+            sp.one_way_us = 5'000;  // 基础 RTT 10 ms，长 RTT 流在数据方向额外加时延
+            const u32 extra_short = u32((pair - 10) * 1000);
+            sp.flows = {FlowSpec{algo, 0, extra_short}, FlowSpec{algo, 0, 150'000}};
+            const double ref_rtt_s = (ref_long ? 160 : pair) / 1000.0;
+            sp.queue_us = u32(2.0 * ref_rtt_s * 1e6);  // 2 × BDP 换算成时间就是 2 × RTT
+            sp.seed = u64(1 + s);
+            sp.duration_us = 60'000'000;
+            sp.measure_from_us = 20'000'000;
+            const std::string param = std::to_string(pair) + "v160/ref=" + (ref_long ? "160" : std::to_string(pair));
+            WriteRep(f, "mpi121_rtt", algo, param, s, Run(sp), "");
+          }
+        }
+        std::printf("rep rtt %s %d done\n", CcAlgoName(algo), pair);
+        std::fflush(stdout);
+      }
+    }
+  } else if (which == "long") {
+    // 本报告 3.2 节的深缓冲共存（同时启动）跑到 3 min，看 25 s 窗口是不是没到稳态
+    for (CcAlgo algo : {CcAlgo::kBbr, CcAlgo::kBbr2, CcAlgo::kBbr3}) {
+      for (double buf : {8.0, 16.0}) {
+        for (int s = 0; s < 3; ++s) {
+          RunSpec sp;
+          sp.flows = {FlowSpec{algo, 0, 0}, FlowSpec{CcAlgo::kCubic, 0, 0}};
+          sp.buf_bdp = buf;
+          sp.seed = u64(1 + s);
+          sp.duration_us = 180'000'000;
+          sp.measure_from_us = 120'000'000;  // 只看最后 60 s
+          WriteRep(f, "long_coexist", algo, mb(buf), s, Run(sp), "measure 120-180 s");
+        }
+        std::printf("rep long %s %.0f done\n", CcAlgoName(algo), buf);
+        std::fflush(stdout);
+      }
+    }
+  }
+  std::fclose(f);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -398,7 +555,8 @@ int main(int argc, char** argv) {
     } else if (a == "--only" && i + 1 < argc) {
       only = argv[++i];
     } else {
-      std::printf("用法: xport_ccexp [--out <dir>] [--only single|single_ts|intra|inter|rtt]\n");
+      std::printf("用法: xport_ccexp [--out <dir>] [--only single|single_ts|intra|inter|rtt|"
+                  "rep_loss|rep_qdelay|rep_coexist|rep_retx|rep_rtt|rep_long]\n");
       return 2;
     }
   }
@@ -408,5 +566,9 @@ int main(int argc, char** argv) {
   if (want("intra")) ExpIntra(dir);
   if (want("inter")) ExpInter(dir);
   if (want("rtt")) ExpRtt(dir);
+  // 复刻实验不在默认集合里（单组最长约数分钟），用 --only rep_<name> 单独跑
+  for (const char* r : {"loss", "qdelay", "coexist", "retx", "rtt", "long"}) {
+    if (only == std::string("rep_") + r) ExpReplica(dir, r);
+  }
   return 0;
 }

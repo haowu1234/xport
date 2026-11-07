@@ -468,7 +468,21 @@ void Transport::OnPacket(Bytes pkt, Time now) {
 
   if (h.type == PacketType::kData) {
     RecordRecv(h.pkt_num);
-    for (u8 i = 0; i < d.stream_count; ++i) OnStream(d.streams[i]);
+    bool recorded = true;
+    for (u8 i = 0; i < d.stream_count; ++i) recorded = OnStream(d.streams[i]) && recorded;
+    // 只 ACK 数据确实登记下来的包。以前登记失败（区间表满）时数据被丢、包却照样被确认，
+    // 发送端认为已送达、永不重传，接收端的连续前缀从此卡死。深缓冲下 BBR Startup 一次
+    // 冲出上千个空洞时必现（50 Mbps / RTT 30 ms / 8 BDP，与 CUBIC 共享瓶颈，交付停在 6.38 MB）。
+    // 失败时把刚置上的接收位清掉，ACK 就不会覆盖这个包，发送端会判丢重传；重传填洞会合并
+    // 区间、腾出空位，所以不会活锁。
+    // 先 RecordRecv、失败再撤销，而不是成功后才 RecordRecv：后一种写法实测让接收路径
+    // 慢约 5 ns/包（cpubench OnPacket 69.5 → 75.2 ns），失败分支极少走到，撤销几乎没有成本。
+    if (!recorded) {
+      ++stats_.rx_range_full;
+      if (h.pkt_num >= recv_base_ && h.pkt_num < recv_base_ + kRecvBits) {
+        ClearRecv(std::size_t(h.pkt_num - recv_base_));
+      }
+    }
 
     // ACK 触发：每 N 个包立即回，否则等合并窗口到期
     ++recv_since_ack_;
@@ -523,11 +537,11 @@ void Transport::SlideRecvWindow(u64 shift) {
   }
 }
 
-void Transport::OnStream(const StreamFrame& f) {
-  if (f.data.empty()) return;
+bool Transport::OnStream(const StreamFrame& f) {
+  if (f.data.empty()) return true;
   if (f.sid >= cfg_.max_streams) {  // 先于 resize：sid 是对端可控的输入
     ++stats_.stream_limit;
-    return;
+    return true;  // 对端越界的帧永久丢弃：确认它，免得对端无限重传
   }
   if (f.sid >= in_.size()) in_.resize(f.sid + 1);  // 对端 sid 从 0 连续分配
   InStream& st = in_[f.sid];
@@ -535,13 +549,13 @@ void Transport::OnStream(const StreamFrame& f) {
 
   const std::size_t cap = st.ring.size();  // 2 的幂
   const u64 end = f.offset + f.data.size();
-  if (end <= st.consumed) return;  // 整段都已消费过：纯重复包
+  if (end <= st.consumed) return true;  // 整段都已消费过：纯重复包
 
   // 未消费量不能超过环形缓冲，否则会覆盖还没被取走的数据。
   // 正常情况下流控保证不会发生；真发生了说明对端越界，丢包并计数。
   if (end - st.consumed > cap) {
     ++stats_.rx_overflow;
-    return;
+    return false;  // 不确认：窗口腾出来之后对端的重传还能送达
   }
 
   // 裁掉已消费的前缀
@@ -549,7 +563,7 @@ void Transport::OnStream(const StreamFrame& f) {
   Bytes src = f.data;
   if (off < st.consumed) {
     const std::size_t skip = std::size_t(st.consumed - off);
-    if (skip >= src.size()) return;
+    if (skip >= src.size()) return true;
     src = src.subspan(skip);
     off = st.consumed;
   }
@@ -562,9 +576,11 @@ void Transport::OnStream(const StreamFrame& f) {
 
   if (end > st.highest_end) st.highest_end = end;
 
-  st.ranges.Add(off, end);
+  // 数据已经写进环形缓冲，但区间没登记就等于没收到：返回 false 让这个包不被确认
+  if (!st.ranges.Add(off, end)) return false;
   const u64 contiguous = st.ranges.PrefixEndFrom(st.consumed);
   if (contiguous > st.contiguous) st.contiguous = contiguous;
+  return true;
 }
 
 std::size_t Transport::ReadableBytes(u32 sid) const {

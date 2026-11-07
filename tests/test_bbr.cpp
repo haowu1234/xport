@@ -410,3 +410,51 @@ TEST(BbrSimTransfersExactlyUnderHeavyLoss) {
   CHECK(got0 == d0);
   CHECK(got1 == d1);
 }
+
+// 接收端区间表（RangeSet，512 段）被打满时，没能登记的数据不能被 ACK。
+// 旧实现先 RecordRecv 再处理帧：表满时数据被丢、包却照样被确认，发送端永不重传，
+// 接收端的连续前缀从此卡死。复现场景是实测卡死的那个：1 条 BBRv1 与 1 条 CUBIC
+// 共享 50 Mbps / RTT 30 ms / 8 BDP 瓶颈，CUBIC 先跑 2 s 把缓冲填满，BBR 的 Startup
+// 冲进来时一次丢掉上千个包、接收端留下上千个空洞。旧实现 BBR 流的交付停在 6.38 MB。
+TEST(RecvRangeOverflowDoesNotAckUnrecordedData) {
+  LinkParams p;
+  p.bandwidth_mbps = 50.0;
+  p.delay_us = 15'000;
+  p.queue_us = 240'000;  // 8 × 30 ms
+  SimLink link(p);
+  link.SetBottleneckGroup(101, 9);
+  link.SetBottleneckGroup(102, 9);
+  TransportConfig cb;
+  cb.cc.algo = CcAlgo::kBbr;
+  cb.cc.rng_seed = 7;
+  cb.initial_max_data = 64ull << 20;
+  cb.recv_window_bytes = 32ull << 20;
+  TransportConfig cc = cb;
+  cc.cc.algo = CcAlgo::kCubic;
+  Transport tb(link, 1, 101, cb), rb(link, 101, 1, cb);
+  Transport tc(link, 2, 102, cc), rc(link, 102, 2, cc);
+  tb.OpenStream();
+  tc.OpenStream();
+  static const std::vector<u8> chunk(1u << 20, 0x42);
+  u64 wb = 0, wc = 0;
+  std::vector<u8> pkt;
+  for (Time now = 0; now <= 12'000'000; now += 10) {
+    if (wc - tc.StreamSentBytes(0) < chunk.size()) { tc.Write(0, Bytes(chunk)); wc += chunk.size(); }
+    if (now >= 2'000'000 && wb - tb.StreamSentBytes(0) < chunk.size()) {
+      tb.Write(0, Bytes(chunk));
+      wb += chunk.size();
+    }
+    tb.Tick(now); rb.Tick(now); tc.Tick(now); rc.Tick(now);
+    while (link.Poll(1, &pkt, now)) tb.OnPacket(Bytes(pkt), now);
+    while (link.Poll(101, &pkt, now)) rb.OnPacket(Bytes(pkt), now);
+    while (link.Poll(2, &pkt, now)) tc.OnPacket(Bytes(pkt), now);
+    while (link.Poll(102, &pkt, now)) rc.OnPacket(Bytes(pkt), now);
+    for (Bytes v = rb.Peek(0); !v.empty(); v = rb.Peek(0)) rb.Consume(0, v.size());
+    for (Bytes v = rc.Peek(0); !v.empty(); v = rc.Peek(0)) rc.Consume(0, v.size());
+  }
+  const double mb = double(rb.DeliveredBytes()) / 1048576.0;
+  std::printf("    BBR flow delivered %.2f MB, rx_range_full %llu\n", mb,
+              (unsigned long long)rb.stats().rx_range_full);
+  // 10 s 里 BBR 流哪怕只拿到 1/4 带宽也有 ~15 MB；卡死时停在 6.38 MB
+  CHECK(mb > 12.0);
+}
