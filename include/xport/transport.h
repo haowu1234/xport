@@ -223,13 +223,15 @@ class Transport {
                   Time now);
   void SendStreamPacket(u32 sid, u64 off, u32 len, Time now, bool retransmit);
   void OnAck(const AckFrame& a, Time now);
-  void OnStream(const StreamFrame& f);
+  // 返回 false 表示这段数据没有被登记（区间表满或越过接收窗口），包不能 ACK
+  bool OnStream(const StreamFrame& f);
   void RecordRecv(u64 pn);
   void SlideRecvWindow(u64 shift);
   bool RecvBit(std::size_t idx) const {
     return (recv_bits_[idx >> 6] >> (idx & 63)) & 1ull;
   }
   void MarkRecv(std::size_t idx) { recv_bits_[idx >> 6] |= 1ull << (idx & 63); }
+  void ClearRecv(std::size_t idx) { recv_bits_[idx >> 6] &= ~(1ull << (idx & 63)); }
   // 返回本次判丢的字节数（BBR 的包守恒和换相判据要用）
   u64 DetectLoss(Time now);
   // 拥塞控制分派。没用虚函数：两个分支都是内联小函数，分支预测稳定命中，
