@@ -419,7 +419,8 @@ void ExpReplica(const std::string& dir, const std::string& which) {
 
   if (which == "loss") {
     // Google IETF 105 p6：1 Gbps / min_rtt 100 ms / 1 BDP / 2 min。
-    // 1 Gbps × 100 ms 的 BDP（12.5 MB）超过发送环（8192 包 ≈ 11 MB），按 50 Mbps 缩放，RTT 与缓冲倍数不变
+    // 按 50 Mbps 缩放，RTT 与缓冲倍数不变。当初是因为 1 Gbps × 100 ms 的 BDP（12.5 MB）超过了
+    // 固定 8192 槽的在途包表；表已改为按需扩容，保留缩放是为了与已发表的复刻结果保持可比
     for (CcAlgo algo : kAlgos) {
       for (double loss : {0.001, 0.01, 0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0}) {
         for (int s = 0; s < 3; ++s) {
@@ -440,7 +441,8 @@ void ExpReplica(const std::string& dir, const std::string& which) {
     }
   } else if (which == "qdelay") {
     // Google IETF 105 p7：2 条同算法流，第 2 条 t=2 s 启动，50 Mbps / 30 ms，缓冲 {1,10,100} BDP，2 min，p50 srtt。
-    // 100 BDP（18.75 MB）超过 CUBIC 默认 max_cwnd 8 MB 和发送环容量，只跑 1 与 10 BDP
+    // 只跑 1 与 10 BDP：当初 100 BDP（18.75 MB）超过了旧的 8 MB max_cwnd 和 8192 槽在途包表，
+    // 两者都已放开，但 100 BDP × 2 min 单组要跑十几分钟，暂不加入
     for (CcAlgo algo : kAlgos) {
       for (double buf : {1.0, 10.0}) {
         for (int s = 0; s < 3; ++s) {

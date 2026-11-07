@@ -36,7 +36,9 @@ struct CcConfig {
   u64 mss = 1368;
   u64 initial_cwnd = 10 * 1368;
   u64 min_cwnd = 2 * 1368;
-  u64 max_cwnd = 8ull << 20;
+  // 窗口上限。以前是 8 MB，比 1 Gbps × 100 ms 的 BDP（12.5 MB）还小；现在给到 256 MB，
+  // 实际的在途上限由 TransportConfig::max_inflight_packets（默认 ≈ 179 MB）决定
+  u64 max_cwnd = 256ull << 20;
 
   // RFC 9438：C 决定增长激进度，beta 是乘性降窗因子
   double cubic_c = 0.4;

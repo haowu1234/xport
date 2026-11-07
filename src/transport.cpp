@@ -57,7 +57,10 @@ void Transport::InitBuffers() {
   // 上限 1 GB：环形缓冲是按流真实分配的内存，不能让"把流控设成无限大"顺手把内存吃光。
   if (recv_window_ > (1ull << 30)) recv_window_ = 1ull << 30;
 
-  sent_ring_.resize(kSentRing);
+  sent_ring_.resize(kSentRingInit);
+  sent_mask_ = kSentRingInit - 1;
+  sent_ring_max_ = kSentRingInit;
+  while (sent_ring_max_ * 2 <= cfg_.max_inflight_packets) sent_ring_max_ *= 2;
   recv_bits_.assign(kRecvWords, 0);
   order_.reserve(64);
 }
@@ -71,8 +74,35 @@ u32 Transport::OpenStream() {
 
 void Transport::Write(u32 sid, Bytes data) {
   if (sid >= out_.size()) return;
-  auto& buf = out_[sid].data;
-  buf.insert(buf.end(), data.begin(), data.end());
+  out_[sid].data.Append(data);
+}
+
+std::size_t Transport::SendBufferBytes() const {
+  std::size_t n = 0;
+  for (const auto& st : out_) n += st.data.ResidentBytes();
+  return n;
+}
+
+bool Transport::MakeSentRoom() {
+  AdvanceOldest();
+  while (next_pn_ + kSentSlack - oldest_pn_ > sent_ring_.size()) {
+    if (sent_ring_.size() >= sent_ring_max_) return false;
+    GrowSentRing();
+  }
+  return true;
+}
+
+void Transport::GrowSentRing() {
+  // 翻倍并按新掩码重新放置。只搬包号跨度内的记录（含已确认的：持续拥塞判定要看
+  // 丢包区间里有没有被确认过的包）。跨度最多几万，扩容是一次性的，不在稳态路径上。
+  std::vector<Sent> bigger(sent_ring_.size() * 2);
+  const std::size_t mask = bigger.size() - 1;
+  for (u64 pn = oldest_pn_; pn < next_pn_; ++pn) {
+    const Sent& s = Slot(pn);
+    if (s.pn == pn && (s.used || s.acked)) bigger[std::size_t(pn) & mask] = s;
+  }
+  sent_ring_.swap(bigger);
+  sent_mask_ = mask;
 }
 
 void Transport::AdvanceOldest() {
@@ -254,12 +284,13 @@ void Transport::EmitPacket(const Seg* segs, u32 nseg, u32 bytes, const u8* paylo
 void Transport::SendStreamPacket(u32 sid, u64 off, u32 len, Time now, bool retransmit) {
   if (sid >= out_.size()) return;
   OutStream& st = out_[sid];
-  if (off + len > st.data.size()) return;
+  if (off + len > st.data.end() || off < st.data.base()) return;
 
+  u8 scratch[kMaxStreamPayload];
   StreamFrame f;
   f.sid = sid;
   f.offset = off;
-  f.data = Bytes(st.data.data() + off, len);
+  f.data = st.data.View(off, len, scratch);
   f.fin = false;
 
   u8 payload[kMaxPayload];
@@ -330,14 +361,16 @@ void Transport::SendData(Time now) {
     // 拥塞窗口：留一个满包的余量
     // PTO 探测包不受 cwnd 约束（RFC 9002 §7.5）：窗口满了也必须发出去
     if (inflight_ + batch_bytes + kMaxStreamPayload > cwnd && probe_budget_ == 0) break;
-    if (inflight_pkts_ >= kSentRing) break;  // 环形数组满，必须先等 ACK
+    if (!HasSentRoom()) break;  // 在途包表扩到上限仍不够：必须先等 ACK
 
     // 1) 重传优先：恢复期若被新数据挤占窗口，丢包会长时间补不上
     if (!retransmit_.empty()) {
       flush();
       auto [rsid, roff, rlen] = retransmit_.front();
-      const bool invalid = rsid >= out_.size() || roff + rlen > out_[rsid].data.size();
-      const bool already = !invalid && out_[rsid].acked.Contains(roff, roff + rlen);
+      const bool invalid = rsid >= out_.size() || roff + rlen > out_[rsid].data.end();
+      // 低于 base 的数据已经释放，只可能是因为它落在已确认的连续前缀里
+      const bool already = !invalid && (roff < out_[rsid].data.base() ||
+                                        out_[rsid].acked.Contains(roff, roff + rlen));
       if (invalid || already) {
         if (already) ++stats_.spurious;
         retransmit_.pop_front();
@@ -368,9 +401,9 @@ void Transport::SendData(Time now) {
       const std::size_t idx = (rr_ + i) % order_.size();
       const u32 cand = order_[idx];
       OutStream& st = out_[cand];
-      if (st.next_off >= st.data.size()) continue;
+      if (st.next_off >= st.data.end()) continue;
 
-      const u64 remain = st.data.size() - st.next_off;
+      const u64 remain = st.data.end() - st.next_off;
       const std::size_t cap = std::min<std::size_t>(kMaxStreamPayload, room - kFrameOverhead);
       const u32 n = u32(std::min<u64>(u64(cap), remain));
       if (n == 0) continue;
@@ -395,14 +428,14 @@ void Transport::SendData(Time now) {
       if (retransmit_.empty() && inflight_pkts_ == 0) {
         for (std::size_t i = 0; i < out_.size(); ++i) {
           const OutStream& st = out_[i];
-          if (st.next_off >= st.data.size() && st.acked.PrefixEnd() < st.data.size()) {
+          if (st.next_off >= st.data.end() && st.acked.PrefixEnd() < st.data.end()) {
             std::fprintf(stderr,
                          "[stall] t=%llums sid=%zu next=%llu acked_prefix=%llu size=%llu "
                          "segments=%zu dropped=%llu next_pn=%llu\n",
                          (unsigned long long)(now / 1000), i,
                          (unsigned long long)st.next_off,
                          (unsigned long long)st.acked.PrefixEnd(),
-                         (unsigned long long)st.data.size(), st.acked.size(),
+                         (unsigned long long)st.data.end(), st.acked.size(),
                          (unsigned long long)st.acked.dropped(), (unsigned long long)next_pn_);
           }
         }
@@ -418,10 +451,11 @@ void Transport::SendData(Time now) {
 
     // 4) 编进当前包。装得下就继续拼下一段，装不下就下一轮 flush。
     OutStream& st = out_[sid];
+    u8 scratch[kMaxStreamPayload];  // 段跨 64 KB 块边界时才用到
     StreamFrame f;
     f.sid = sid;
     f.offset = off;
-    f.data = Bytes(st.data.data() + off, len);
+    f.data = st.data.View(off, len, scratch);
     f.fin = false;
 
     const std::size_t n = EncodeStream(MutBytes(payload + plen, kMaxPayload - plen), f);
@@ -662,7 +696,13 @@ void Transport::OnAck(const AckFrame& a, Time now) {
       bool recorded = true;
       for (u32 k = 0; k < s.seg_count; ++k) {
         OutStream& st = out_[s.segs[k].sid];
-        if (!st.acked.Add(s.segs[k].off, s.segs[k].off + s.segs[k].len)) recorded = false;
+        if (!st.acked.Add(s.segs[k].off, s.segs[k].off + s.segs[k].len)) {
+          recorded = false;
+        } else {
+          // 已确认的连续前缀覆盖了整块就释放（通常一次比较就返回）。段的边界在重传时不变，
+          // 所以前缀之下的任何段都已整段确认，不会再被读到
+          st.data.ReleaseBefore(st.acked.PrefixEnd());
+        }
       }
       if (!recorded) {
         // 确认区间表满了。绝不能"记不下就当已确认"——那一包已经从环形数组里消失，
@@ -815,7 +855,7 @@ u64 Transport::DetectLoss(Time now) {
   if (pc_any && pc_hi_pn > pc_lo_pn &&
       pc_hi_t - pc_lo_t > Time(cfg_.persistent_congestion_threshold) * Pto()) {
     bool gap_acked = false;
-    const u64 hi = std::min<u64>(pc_hi_pn, pc_lo_pn + kSentRing);
+    const u64 hi = std::min<u64>(pc_hi_pn, pc_lo_pn + sent_ring_.size());
     for (u64 pn = pc_lo_pn + 1; pn < hi; ++pn) {
       const Sent& s = Slot(pn);
       if (s.pn == pn && s.acked) {
@@ -861,7 +901,7 @@ void Transport::OnPtoTimeout() {
 
 bool Transport::HasUnsentData() const {
   for (const auto& st : out_) {
-    if (st.next_off < st.data.size() && sent_high_water_ + 1 <= flow_max_) return true;
+    if (st.next_off < st.data.end() && sent_high_water_ + 1 <= flow_max_) return true;
   }
   return false;
 }
@@ -899,8 +939,8 @@ bool Transport::SendComplete() const {
   if (inflight_pkts_ != 0 || !retransmit_.empty()) return false;
   if (flow_blocked_) return false;
   for (const auto& st : out_) {
-    if (st.next_off < st.data.size()) return false;
-    if (st.acked.PrefixEnd() < st.data.size()) return false;
+    if (st.next_off < st.data.end()) return false;
+    if (st.acked.PrefixEnd() < st.data.end()) return false;
   }
   return true;
 }
