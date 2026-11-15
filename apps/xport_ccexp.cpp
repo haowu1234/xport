@@ -38,7 +38,8 @@ constexpr u32 kBottleneck = 1000;
 // 单个种子的份额能差出一倍。每个配置跑这么多个种子，CSV 逐行记录，报告取中位数和范围。
 constexpr int kFairSeeds = 3;
 
-const CcAlgo kAlgos[] = {CcAlgo::kCubic, CcAlgo::kBbr, CcAlgo::kBbr2, CcAlgo::kBbr3};
+const CcAlgo kAlgos[] = {CcAlgo::kCubic, CcAlgo::kBbr, CcAlgo::kBbr2, CcAlgo::kBbr3,
+                         CcAlgo::kCopa};
 
 struct FlowSpec {
   CcAlgo algo = CcAlgo::kCubic;

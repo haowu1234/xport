@@ -22,6 +22,7 @@ add_library(xport STATIC
   src/bbr3.cpp
   src/crc32c.cpp
   src/cc.cpp
+  src/copa.cpp
   src/packet.cpp
   src/sim.cpp
   src/transport.cpp

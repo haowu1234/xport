@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
       out = argv[++i];
     } else {
       std::printf("用法: xport_ccprobe [--scenario cubic|hystart|sawtooth|longhaul] "
-                  "[--algo cubic|reno|bbr] "
+                  "[--algo cubic|reno|bbr|bbr2|bbr3|copa] "
                   "[--out <csv>]\n");
       return 2;
     }
@@ -110,6 +110,8 @@ int main(int argc, char** argv) {
     tcfg.cc.algo = CcAlgo::kBbr2;
   } else if (algo == "bbr3") {
     tcfg.cc.algo = CcAlgo::kBbr3;
+  } else if (algo == "copa") {
+    tcfg.cc.algo = CcAlgo::kCopa;
   } else if (algo == "cubic") {
     tcfg.cc.algo = CcAlgo::kCubic;
   } else {

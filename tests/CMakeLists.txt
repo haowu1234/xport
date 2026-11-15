@@ -2,6 +2,7 @@ add_executable(xport_tests
   test_main.cpp
   test_wire.cpp
   test_cc.cpp
+  test_copa.cpp
   test_transport.cpp
   test_batch_io.cpp
   test_rate_sample.cpp

@@ -30,6 +30,8 @@ const char* CcAlgoName(CcAlgo a) {
       return "bbr2";
     case CcAlgo::kBbr3:
       return "bbr3";
+    case CcAlgo::kCopa:
+      return "copa";
   }
   return "?";
 }
