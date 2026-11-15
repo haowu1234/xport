@@ -29,6 +29,8 @@ Transport::Transport(SimLink& link, u32 self, u32 peer, const TransportConfig& c
       use_bbr_(bbr_ != nullptr),
       bbr3_(MakeBbr3(cfg.cc)),
       use_bbr3_(bbr3_ != nullptr),
+      copa_(cfg.cc.algo == CcAlgo::kCopa ? std::make_unique<CopaCc>(cfg.cc) : nullptr),
+      use_copa_(copa_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -42,6 +44,8 @@ Transport::Transport(IoEndpoint& io, const TransportConfig& cfg)
       use_bbr_(bbr_ != nullptr),
       bbr3_(MakeBbr3(cfg.cc)),
       use_bbr3_(bbr3_ != nullptr),
+      copa_(cfg.cc.algo == CcAlgo::kCopa ? std::make_unique<CopaCc>(cfg.cc) : nullptr),
+      use_copa_(copa_ != nullptr),
       flow_max_(cfg.initial_max_data) {
   InitBuffers();
 }
@@ -153,6 +157,7 @@ void Transport::Tick(Time now) {
 
 u64 Transport::PacingRateBps() const {
   // CUBIC 由 cwnd/SRTT 推出速率；BBR 直接给出 pacing_gain × BtlBw
+  if (use_copa_) return copa_->PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000);
   if (use_bbr3_) return bbr3_->PacingRateBps();
   return use_bbr_ ? bbr_->PacingRateBps() : cc_.PacingRateBps(has_rtt_ ? u64(srtt_us_) : 1000);
 }
@@ -732,6 +737,20 @@ void Transport::OnAck(const AckFrame& a, Time now) {
   }
   // 有新包被确认，说明路径通了：退避清零（RFC 9002 §6.2.1）
   if (newly_acked) pto_count_ = 0;
+  if (use_copa_) {
+    // Copa 和 CUBIC 一样先调窗再判丢：丢包在默认模式下只登记恢复期，不影响窗口。
+    // 窗口是否被用满按 Copa 自己的窗口判（上面的 cwnd_limited 是按 CUBIC 的窗口算的）。
+    CopaAck ca;
+    ca.now = now;
+    ca.acked = acked_bytes;
+    ca.rtt_us = sample;
+    ca.srtt_us = has_rtt_ ? u64(srtt_us_) : 0;
+    ca.cwnd_limited = copa_->IsCwndLimited(prior_inflight);
+    copa_->OnAck(ca);
+    DetectLoss(now);
+    last_rate_sample_ = sampler_.Finish(copa_->MinRttUs());
+    return;
+  }
   if (!use_bbr_ && !use_bbr3_) {
     // 一次 ACK 只调一次，避免逐包 pow()——10G 场景下这是实打实的 CPU 开销
     cc_.OnAck(acked_bytes, std::max(max_acked_pn, largest), now,
@@ -840,7 +859,9 @@ u64 Transport::DetectLoss(Time now) {
   }
 
   if (congested) {
-    if (use_bbr3_) {
+    if (use_copa_) {
+      copa_->OnCongestion(now);
+    } else if (use_bbr3_) {
       bbr3_->OnCongestion(now);
     } else if (use_bbr_) {
       bbr_->OnCongestion(now);
@@ -864,7 +885,9 @@ u64 Transport::DetectLoss(Time now) {
       }
     }
     if (!gap_acked) {
-      if (use_bbr3_) {
+      if (use_copa_) {
+        copa_->OnPersistentCongestion(now);
+      } else if (use_bbr3_) {
         bbr3_->OnPersistentCongestion(now);
       } else if (use_bbr_) {
         bbr_->OnPersistentCongestion(now);

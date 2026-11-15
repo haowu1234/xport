@@ -26,6 +26,7 @@ enum class CcAlgo : u8 {
   kBbr = 2,   // BBR v1，见 bbr.h。由 transport 分派到 BbrCc，CubicCc 不处理这个值
   kBbr2 = 3,  // BBR v2（Linux v2alpha 参数），见 bbr3.h
   kBbr3 = 4,  // BBR v3（draft-ietf-ccwg-bbr-06），见 bbr3.h
+  kCopa = 5,  // Copa 默认模式（NSDI 2018，δ = 0.5），见 copa.h
 };
 
 const char* CcPhaseName(CcPhase p);
@@ -60,6 +61,14 @@ struct CcConfig {
   // 多流实验里每条流要给不同的值：同一种子的流会同步探测、同时撞满队列，
   // 公平性和收敛速度都会被这个人为的同步扭曲。
   u32 rng_seed = 0;
+
+  // Copa（copa.h）：是否启用 §2.2 的模式切换。关掉时 δ 恒为 0.5（只有默认模式），
+  // 用于和"带竞争模式"的版本做 A/B。
+  bool copa_mode_switch = true;
+  // 竞争模式里 1/δ 怎么变。true：沿 CUBIC 曲线增长、丢包乘 0.7（参数同上面的
+  // cubic_c / cubic_beta）；false：论文实现的 AIMD（每 RTT +1、丢包减半）。
+  // AIMD 在 ≥ 4 BDP 的深缓冲里对 CUBIC 只拿到 9–14% 的份额，见 copa.h。
+  bool copa_cubic_competitive = true;
 };
 
 class CubicCc {

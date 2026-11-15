@@ -24,6 +24,7 @@
 #include "xport/bbr.h"
 #include "xport/bbr3.h"
 #include "xport/cc.h"
+#include "xport/copa.h"
 #include "xport/io.h"
 #include "xport/packet.h"
 #include "xport/ranges.h"
@@ -112,9 +113,16 @@ class Transport {
     static const Bbr3Cc kIdle(CcConfig{}, Bbr3Params::V3());
     return bbr3_ ? *bbr3_ : kIdle;
   }
+  // 非 Copa 连接返回静态初始对象，诊断代码可无条件调用
+  const CopaCc& copa() const {
+    static const CopaCc kIdle;
+    return copa_ ? *copa_ : kIdle;
+  }
+  bool UsingCopa() const { return use_copa_; }
   bool UsingBbr() const { return use_bbr_; }
   bool UsingBbr3() const { return use_bbr3_; }  // v2 或 v3
   u64 CongestionEvents() const {
+    if (use_copa_) return copa_->CongestionEvents();
     return use_bbr3_ ? bbr3_->CongestionEvents()
                      : (use_bbr_ ? bbr_->CongestionEvents() : cc_.CongestionEvents());
   }
@@ -122,9 +130,11 @@ class Transport {
   const RateSampler& rate_sampler() const { return sampler_; }
   const RateSample& LastRateSample() const { return last_rate_sample_; }
   u64 Cwnd() const {
+    if (use_copa_) return copa_->cwnd();
     return use_bbr3_ ? bbr3_->cwnd() : (use_bbr_ ? bbr_->cwnd() : cc_.cwnd());
   }
-  u64 Ssthresh() const { return use_bbr_ || use_bbr3_ ? 0 : cc_.ssthresh(); }  // BBR 没有 ssthresh
+  // BBR / Copa 没有 ssthresh
+  u64 Ssthresh() const { return use_bbr_ || use_bbr3_ || use_copa_ ? 0 : cc_.ssthresh(); }
   u64 InFlight() const { return inflight_; }
   u64 SrttUs() const { return has_rtt_ ? u64(srtt_us_) : 0; }
   u64 FlowLimit() const { return flow_max_; }
@@ -257,10 +267,12 @@ class Transport {
   // 拥塞控制分派。没用虚函数：两个分支都是内联小函数，分支预测稳定命中，
   // 而虚调用会挡住内联，CUBIC 热路径上的 cwnd()/InRecovery() 都变成间接调用
   bool CcInRecovery(Time sent_t) const {
+    if (use_copa_) return copa_->InRecovery(sent_t);
     if (use_bbr3_) return bbr3_->InRecovery(sent_t);
     return use_bbr_ ? bbr_->InRecovery(sent_t) : cc_.InRecovery(sent_t);
   }
   u64 CcBurstBytes() const {
+    if (use_copa_) return copa_->PacingBurstBytes();
     if (use_bbr3_) return bbr3_->PacingBurstBytes();
     return use_bbr_ ? bbr_->PacingBurstBytes() : cc_.PacingBurstBytes();
   }
@@ -320,6 +332,9 @@ class Transport {
   // v2/v3 同理：按需堆分配，不选就不占 Transport 的体积
   std::unique_ptr<Bbr3Cc> bbr3_;
   bool use_bbr3_ = false;
+  // Copa 同理
+  std::unique_ptr<CopaCc> copa_;
+  bool use_copa_ = false;
   RateSampler sampler_;
   RateSample last_rate_sample_;  // 最近一次 ACK 产生的速率样本
 
