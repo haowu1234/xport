@@ -112,6 +112,9 @@ void CopaCc::OnAck(const CopaAck& a) {
   // 负的排队时延没有意义，按"队列为空"处理，目标速率无穷大。
   queuing_delay_us_ =
       standing_rtt_us_ > min_rtt_us_ ? double(standing_rtt_us_ - min_rtt_us_) : 0.0;
+  // 噪声下限：低于它的排队时延当作抖动（见 CcConfig::copa_dq_floor_us）
+  const double floor_us = double(cfg_.copa_dq_floor_us);
+  queuing_delay_us_ = queuing_delay_us_ > floor_us ? queuing_delay_us_ - floor_us : 0.0;
 
   const double cwnd_pkts = cwnd_ / double(cfg_.mss);
   // 目标窗口 = 目标速率 × RTT_standing = cwnd_pkts / (δ · d_q_秒) × (d_q 与速率的比较

@@ -237,6 +237,35 @@ TEST(CopaCwndStaysWithinBounds) {
   CHECK(cc.cwnd() >= u64(2 * kMss));
 }
 
+// d_q 噪声下限（CcConfig::copa_dq_floor_us）：低于下限的排队时延当作 0
+TEST(CopaDqFloorTreatsSmallQueueAsEmpty) {
+  CcConfig cfg;
+  cfg.copa_dq_floor_us = 50;
+  CopaCc cc(cfg);
+  cc.OnAck(Ack(0, 20, 20, kMss));  // 20 µs 回环 RTT
+  cc.OnAck(Ack(20, 20, 20, kMss));
+  cc.OnAck(Ack(40, 20, 20, kMss));
+  // 30 µs 的"排队"其实是抖动：减去 50 µs 下限后为 0，目标无穷大，慢启动继续
+  cc.OnAck(Ack(60, 50, 20, kMss));
+  CHECK(Near(cc.QueuingDelayUs(), 0.0, 1e-9));
+  CHECK(cc.InSlowStart());
+}
+
+TEST(CopaDqFloorSubtractsFromLargerQueue) {
+  CcConfig cfg;
+  cfg.copa_dq_floor_us = 1000;
+  CopaCc cc(cfg);
+  cc.OnAck(Ack(0, 20'000, 20'000, kMss));
+  cc.OnAck(Ack(20'000, 20'000, 20'000, kMss));
+  cc.OnAck(Ack(40'000, 20'000, 20'000, kMss));
+  cc.OnAck(Ack(60'000, 24'000, 20'000, kMss));  // 4 ms 排队 − 1 ms 下限 = 3 ms
+  CHECK(Near(cc.QueuingDelayUs(), 3000.0, 1e-6));
+}
+
+TEST(CopaDqFloorDefaultsToZero) {
+  CHECK_EQ(CcConfig{}.copa_dq_floor_us, u32(0));
+}
+
 // ---- 模式切换（§2.2）----
 
 namespace {
