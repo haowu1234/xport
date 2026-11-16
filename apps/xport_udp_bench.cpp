@@ -187,6 +187,7 @@ struct RunOpts {
   u32 gap_us = 500;
   double relay_loss = 0.0;
   CcAlgo algo = CcAlgo::kCubic;
+  u32 copa_dq_floor_us = 0;
 };
 
 struct Result {
@@ -259,6 +260,7 @@ Result RunXport(const RunOpts& o) {
   tc.ack_delay_us = o.ack_delay_us;
   tc.coalesce = o.coalesce;
   tc.cc.algo = o.algo;
+  tc.cc.copa_dq_floor_us = o.copa_dq_floor_us;
 
   Transport tx(*tx_sock, tc);
   Transport rx(*rx_sock, tc);
@@ -571,6 +573,7 @@ int main(int argc, char** argv) {
     else if (a == "--rounds" && i + 1 < argc) base.rounds = std::atoi(argv[++i]);
     else if (a == "--gap" && i + 1 < argc) base.gap_us = u32(std::atoi(argv[++i]));
     else if (a == "--relay-loss" && i + 1 < argc) base.relay_loss = std::atof(argv[++i]);
+    else if (a == "--copa-dq-floor" && i + 1 < argc) base.copa_dq_floor_us = u32(std::atoi(argv[++i]));
     else if (a == "--cc" && i + 1 < argc) {
       const std::string n = argv[++i];
       bool found = false;
@@ -594,6 +597,7 @@ int main(int argc, char** argv) {
           "  --gap US         轮间隔（微秒），默认 500\n"
           "  --relay-loss PCT 用进程内转发代理注入丢包（百分数）\n"
           "  --cc ALGO        拥塞控制：cubic|reno|bbr|bbr2|bbr3|copa，默认 cubic\n"
+          "  --copa-dq-floor US  Copa 排队时延噪声下限（微秒），默认 0\n"
           "  --limit S        单次超时（秒），默认 60\n"
           "  --trace FILE     导出 cwnd/RTT 轨迹 CSV\n"
           "  --csv FILE       导出结果 CSV\n");

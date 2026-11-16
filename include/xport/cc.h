@@ -69,6 +69,11 @@ struct CcConfig {
   // cubic_c / cubic_beta）；false：论文实现的 AIMD（每 RTT +1、丢包减半）。
   // AIMD 在 ≥ 4 BDP 的深缓冲里对 CUBIC 只拿到 9–14% 的份额，见 copa.h。
   bool copa_cubic_competitive = true;
+  // Copa 排队时延的噪声下限（µs）：d_q 先减去这个值，不足则当作 0。默认 0 = 论文行为。
+  // 微秒级 RTT（回环、同机房）下几微秒的调度抖动会被当成排队，目标窗口只剩几个包：
+  // 回环实测 20 µs 下限把 Copa 从 1.3 提到 4.3 Gbps。代价是广域链路上单流排队变大
+  // （50 Mbps / 40 ms：0.55 → 0.81 ms），所以不默认开启。
+  u32 copa_dq_floor_us = 0;
 };
 
 class CubicCc {
