@@ -1,4 +1,6 @@
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include "test_framework.h"
@@ -27,14 +29,22 @@ struct Pair {
   }
 };
 
-// 轮询直到收满 want 个，或试探次数用尽（回环上内核偶尔需要几次轮询）
-std::size_t DrainUntil(UdpSocket& s, Batch* out, std::size_t want, int tries = 200) {
+// 轮询直到收满 want 个，或等待时间用尽。
+// 以前是"连续 200 次非阻塞 Recv、中间不停顿"：负载高的 CI 机器上 200 次空轮询
+// 几微秒就跑完了，内核还没把包送到，测试就以 0/10 失败（macOS CI 上出现过）。
+// 现在按墙钟预算等，空轮询之间睡 100 µs。
+std::size_t DrainUntil(UdpSocket& s, Batch* out, std::size_t want, int wait_ms = 2000) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
   std::size_t total = 0;
   Batch tmp;
-  for (int t = 0; t < tries && total < want; ++t) {
+  while (total < want) {
     const std::size_t n = s.Recv(&tmp, s.Now());
     for (std::size_t i = 0; i < n; ++i) out->push_back(tmp[i]);
     total += n;
+    if (n == 0) {
+      if (std::chrono::steady_clock::now() >= deadline) break;
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
   }
   return total;
 }
@@ -93,7 +103,7 @@ TEST(BatchFlushIsRequiredForTail) {
   CHECK_EQ(p.a->queued(), 3u);
 
   Batch early;
-  DrainUntil(*p.b, &early, 1, 5);
+  DrainUntil(*p.b, &early, 1, /*wait_ms=*/5);  // 等 5 ms：真漏发了，回环上这点时间足够收到
   CHECK_EQ(early.size(), 0u);  // 还压在队列里
 
   CHECK(p.a->Flush(p.a->Now()));
