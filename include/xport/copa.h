@@ -32,8 +32,9 @@
 //   * 竞争模式：有长时间填满缓冲的流（CUBIC / Reno）同在瓶颈时，队列永远排不空，
 //     δ 固定的 Copa 会被饿死（实测份额 0.3–6%）。这时对 1/δ 做 AIMD：每 RTT +1，
 //     丢包时减半（每 RTT 至多一次），δ 上限 0.5。
-// 判据利用 Copa 自己的性质：只有 Copa 流时队列至少每 5 RTT 排空一次。最近 5 个 RTT
+// 判据利用 Copa 自己的性质：只有 Copa 流时队列至少每 4–5 RTT 排空一次。最近 4 个 RTT
 // 里见过"接近空"的队列（d_q < 0.1·(RTT_max − RTT_min)，RTT_max 取最近 4 个 RTT）
+// （窗口从论文的 5 RTT 改成 genericCC 的 4 RTT，0.5 BDP 下对 CUBIC 份额 0.24 → 0.38）
 // 就留在默认模式，否则切到竞争模式；切回默认模式时 δ 复位到 0.5。
 // 每 RTT 一步的细节（+1 与减半的节拍）照作者实现 genericCC 的 update_delta。
 //
@@ -165,6 +166,7 @@ class CopaCc {
   Time cubic_epoch_t_ = 0;
   double cubic_wmax_ = 0;
   double cubic_k_s_ = 0;
+  Time competitive_since_ = 0;  // 切入竞争模式的时刻，用于延迟启动 CUBIC 曲线
   u64 last_srtt_us_ = 0;
 
   double queuing_delay_us_ = 0;

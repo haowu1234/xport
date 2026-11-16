@@ -39,11 +39,15 @@ void CopaCc::UpdateMode(Time now, u64 srtt_us) {
     // 切回默认模式时 δ 复位；切入竞争模式时从当前 δ（即 0.5）开始做 AIMD
     if (!competitive_) delta_ = kDefaultDelta;
     cubic_epoch_ = false;
+    competitive_since_ = now;
     last_delta_inc_t_ = now;
   }
-  if (competitive_ && cfg_.copa_cubic_competitive) {
+  // CUBIC 曲线延迟 5 个 RTT 再启动：刚切入竞争模式时还不知道对手多强，
+  // 让每 RTT +1 先把 1/δ 推到几个包再交给 CUBIC 曲线。如果不延迟，浅缓冲
+  // （0.5 BDP）里 CUBIC 曲线的 +1 下限会把 4 条 Copa 流的队列推到 7.8 ms。
+  if (competitive_ && cfg_.copa_cubic_competitive &&
+      srtt_us > 0 && now - competitive_since_ >= 5 * srtt_us) {
     if (!cubic_epoch_) {
-      // 刚切入竞争模式：曲线从当前 1/δ 起步，K = 0，即直接进入凸增长段
       cubic_epoch_ = true;
       cubic_epoch_t_ = now;
       cubic_wmax_ = 1.0 / delta_;
@@ -53,8 +57,9 @@ void CopaCc::UpdateMode(Time now, u64 srtt_us) {
     const double inv = cfg_.cubic_c * std::pow(t - cubic_k_s_, 3.0) + cubic_wmax_;
     if (inv > 1.0 / delta_) delta_ = 1.0 / inv;  // 只抬高；下面每 RTT +1 是下限
   }
-  if (competitive_ && now - last_delta_inc_t_ >= srtt_us) {
-    // 加性增：每 RTT 1/δ += 1，即 δ ← 1/(1/δ + 1)
+  // 每 RTT +1 只在 CUBIC 曲线尚未启动时使用。曲线一旦启动，它自己的增长速度
+  // 远超 +1/RTT，+1 下限反而成为噪声——在浅缓冲里它会把 Copa 流之间的队列推高。
+  if (competitive_ && !cubic_epoch_ && now - last_delta_inc_t_ >= srtt_us) {
     delta_ = 1.0 / (1.0 / delta_ + 1.0);
     last_delta_inc_t_ = now;
   }
@@ -91,7 +96,9 @@ void CopaCc::OnAck(const CopaAck& a) {
     // 模式判据用的两个窗口：最近 5 RTT 的最小值、最近 4 RTT 的最大值。
     // 没有平滑 RTT 时用本次样本代替 RTT 长度。
     const Time rtt_len = a.srtt_us > 0 ? Time(a.srtt_us) : a.rtt_us;
-    recent_min_rtt_us_ = PushMin(near_empty_window_, a.now, a.rtt_us, 5 * rtt_len);
+    // genericCC 用 4·srtt 窗口，论文写 5 RTT。4 RTT 在 0.5 BDP 下对 CUBIC 的份额
+    // 0.38 对比 5 RTT 的 0.24（3 个种子均值），其余缓冲相当，Copa 之间排队不变。
+    recent_min_rtt_us_ = PushMin(near_empty_window_, a.now, a.rtt_us, 4 * rtt_len);
     // 最大值：把样本取反存进同一种单调队列
     const Time neg = ~Time(0) - a.rtt_us;
     recent_max_rtt_us_ = ~Time(0) - PushMin(recent_max_window_, a.now, neg, 4 * rtt_len);

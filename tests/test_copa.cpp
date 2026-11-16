@@ -335,10 +335,11 @@ TEST(CopaCubicCompetitiveLossMultipliesByBeta) {
   CopaCc cc;
   Time t = 0;
   FeedConstant(cc, t, 20'000, 200'000);
-  FeedOscillating(cc, t, 30'000, 34'000, 40'000, 400'000);
+  // 切入后先每 RTT +1 走 5 个 RTT，再交给 CUBIC 曲线；1 s 后曲线已经在跑
+  FeedOscillating(cc, t, 30'000, 34'000, 40'000, 1'000'000);
   CHECK(cc.InCompetitiveMode());
   const double inv0 = 1.0 / cc.Delta();
-  CHECK(inv0 > 8.0);
+  CHECK(inv0 > 6.0);
   cc.OnCongestion(t);
   CHECK(Near(1.0 / cc.Delta(), inv0 * 0.7, 1e-9));
   cc.OnCongestion(t + 5'000);
@@ -356,24 +357,28 @@ TEST(CopaCubicCompetitiveRegrowsToWmaxAtK) {
   cc.OnCongestion(t);
   const double k_s = std::cbrt(wmax * 0.3 / 0.4);
   const Time k_us = Time(k_s * 1e6);
-  // 走到 K 之前一点：曲线在 W_max 下方。每 RTT +1 的下限在这段时间里也会抬高 1/δ，
-  // 所以只断言"不超过 W_max 太多"而不断言精确值
+  // 曲线启动后不再有每 RTT +1，K 之后 2 s 必然越过 W_max
   FeedOscillating(cc, t, 30'000, 34'000, 40'000, k_us + 2 * 1'000'000);
   CHECK(1.0 / cc.Delta() > wmax);  // K 之后 2 s：已越过 W_max
 }
 
-// 长时间处于竞争模式时，CUBIC 曲线的 1/δ 增长比每 RTT +1 快（凸段）
+// 长时间处于竞争模式时，CUBIC 曲线的 1/δ 增长比每 RTT +1 快（凸段）。
+// 用 100 ms RTT：+1/RTT 即每秒 +10，而 0.4·t³ 在 9 s 内远超它；整段不超过
+// RTTmin 的 10 s 窗口，避免 RTTmin 漂移把流踢回默认模式。
 TEST(CopaCubicCompetitiveOutgrowsAimd) {
   CopaCc cubic;
   CopaCc aimd(AimdCfg());
   for (CopaCc* cc : {&cubic, &aimd}) {
     Time t = 0;
-    FeedConstant(*cc, t, 20'000, 200'000);
-    FeedOscillating(*cc, t, 30'000, 34'000, 40'000, 10'000'000);
+    for (Time end = t + 1'000'000; t < end; t += 1000) cc->OnAck(Ack(t, 100'000, 100'000, kMss));
+    for (Time end = t + 8'500'000; t < end; t += 1000) {
+      const Time rtt = (t % 200'000) < 100'000 ? 134'000 : 130'000;
+      cc->OnAck(Ack(t, rtt, 100'000, kMss));
+    }
     CHECK(cc->InCompetitiveMode());
   }
-  // 10 s：AIMD 约 2 + 500 = 502；CUBIC 0.4·10³ = 400 叠加 +1 下限之后更大
-  CHECK(1.0 / cubic.Delta() > 1.0 / aimd.Delta());
+  // 约 8 s 竞争模式：AIMD ≈ 2 + 80；CUBIC ≈ 7 + 0.4·7.5³ ≈ 176
+  CHECK(1.0 / cubic.Delta() > 1.5 / aimd.Delta());
 }
 
 TEST(CopaCompetitiveDeltaNeverExceedsDefault) {
