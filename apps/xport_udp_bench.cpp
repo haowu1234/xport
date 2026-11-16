@@ -186,6 +186,7 @@ struct RunOpts {
   int rounds = 0;
   u32 gap_us = 500;
   double relay_loss = 0.0;
+  CcAlgo algo = CcAlgo::kCubic;
 };
 
 struct Result {
@@ -257,6 +258,7 @@ Result RunXport(const RunOpts& o) {
   tc.recv_window_bytes = o.window;
   tc.ack_delay_us = o.ack_delay_us;
   tc.coalesce = o.coalesce;
+  tc.cc.algo = o.algo;
 
   Transport tx(*tx_sock, tc);
   Transport rx(*rx_sock, tc);
@@ -569,6 +571,15 @@ int main(int argc, char** argv) {
     else if (a == "--rounds" && i + 1 < argc) base.rounds = std::atoi(argv[++i]);
     else if (a == "--gap" && i + 1 < argc) base.gap_us = u32(std::atoi(argv[++i]));
     else if (a == "--relay-loss" && i + 1 < argc) base.relay_loss = std::atof(argv[++i]);
+    else if (a == "--cc" && i + 1 < argc) {
+      const std::string n = argv[++i];
+      bool found = false;
+      for (CcAlgo c : {CcAlgo::kCubic, CcAlgo::kReno, CcAlgo::kBbr, CcAlgo::kBbr2, CcAlgo::kBbr3,
+                       CcAlgo::kCopa}) {
+        if (n == CcAlgoName(c)) { base.algo = c; found = true; }
+      }
+      if (!found) { std::printf("未知算法: %s\n", n.c_str()); return 2; }
+    }
     else if (a == "--help") {
       std::printf(
           "用法: xport_udp_bench [选项]\n"
@@ -582,6 +593,7 @@ int main(int argc, char** argv) {
           "  --rounds R       小消息轮数\n"
           "  --gap US         轮间隔（微秒），默认 500\n"
           "  --relay-loss PCT 用进程内转发代理注入丢包（百分数）\n"
+          "  --cc ALGO        拥塞控制：cubic|reno|bbr|bbr2|bbr3|copa，默认 cubic\n"
           "  --limit S        单次超时（秒），默认 60\n"
           "  --trace FILE     导出 cwnd/RTT 轨迹 CSV\n"
           "  --csv FILE       导出结果 CSV\n");

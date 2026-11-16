@@ -5,7 +5,8 @@
 //   * 包级可靠传输：SACK 区间 ACK + 包阈值/时间阈值丢包检测 + PTO（RFC 9002）
 //   * 批量收发：SendQueued + FlushSend，后端可把多包合成一次 syscall
 //   * 恢复期（recovery period）：同一窗口内只降一次窗，避免被重复砍
-//   * 拥塞控制：CUBIC + HyStart++（见 cc.h），可切 Reno 做对照，或切 BBR v1（见 bbr.h）
+//   * 拥塞控制：CUBIC + HyStart++（见 cc.h），可切 Reno 做对照，或切 BBR v1（bbr.h）、
+//     BBR v2/v3（bbr3.h）、Copa（copa.h）
 //   * pacing：令牌桶按 cwnd/SRTT 放行，杜绝"一次 Tick 倒空整个窗口"
 //   * 流控：MAX_DATA 连接级窗口 + 半窗更新，附带流控探测防死锁
 //   * 多流调度：DRR（deficit round robin），按字节公平
